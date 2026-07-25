@@ -17,7 +17,7 @@ cp "$MANIFEST" "$OUTPUT/manifest.json"
 
 jq -r '.config.digest, .layers[].digest' "$MANIFEST" |
   while read -r digest; do
-    cp "$OLLAMA_STORE/blobs/${digest/:/-}" "$OUTPUT/"
+    ln "$OLLAMA_STORE/blobs/${digest/:/-}" "$OUTPUT/"
   done
 
 cat >"$OUTPUT/dataset-metadata.json" <<EOF
@@ -28,6 +28,15 @@ cat >"$OUTPUT/dataset-metadata.json" <<EOF
 }
 EOF
 
+cat >"$OUTPUT/GEMMA_TERMS_URL.txt" <<'EOF'
+Gemma Terms of Use: https://ai.google.dev/gemma/terms
+Gemma Prohibited Use Policy: https://policies.google.com/terms/generative-ai/use-policy
+EOF
+
+cat >"$OUTPUT/OLLAMA_LICENSE_URL.txt" <<'EOF'
+Ollama license: https://github.com/ollama/ollama/blob/main/LICENSE
+EOF
+
 echo "Prepared $OUTPUT"
-echo "Add the required Gemma notice/license files, then run:"
+echo "Review the Gemma terms references, then run:"
 echo "  kaggle datasets create -p $OUTPUT --keep-tabular"

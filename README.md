@@ -20,6 +20,12 @@ Run:
 Verified on 2026-07-25: private kernel version 4 completed this flow without
 browser interaction and returned `unattended CLI inference works`.
 
+The kernel attaches two private datasets:
+
+- `devabhirupdas/kaggle-llm-recipes-github-source`: a snapshot imported from
+  this GitHub repository
+- `devabhirupdas/gemma3n-e4b-ollama-cache`: the Ollama manifest and model blobs
+
 The command uploads a private Kaggle kernel, requests a T4 GPU, and waits up to
 15 minutes for:
 
@@ -92,7 +98,14 @@ repository contains only a placeholder. Keep the generated Kaggle kernel
 private and rotate the token if that source becomes public. The exposed Ollama
 endpoint currently has no application-level authentication.
 
-## Cache the model as a private Kaggle dataset
+## GitHub source and model cache datasets
+
+Kaggle can create a dataset from a public GitHub repository archive. The
+result is a versioned snapshot with the repository URL recorded as its remote
+source; it is not a live Git checkout. Use the dataset page's **Update** action
+after pushing repository changes:
+
+<https://www.kaggle.com/datasets/devabhirupdas/kaggle-llm-recipes-github-source>
 
 Kaggle datasets are durable and attach read-only under `/kaggle/input`. A
 private dataset containing Ollama's manifest and referenced blobs can remove
@@ -115,9 +128,9 @@ kaggle datasets create \
 ```
 
 Attach it by adding the dataset slug to `dataset_sources` in
-`kernel-metadata.json`. The server can then construct a writable
-`OLLAMA_MODELS` directory, symlink the attached read-only blobs, and copy the
-manifest instead of calling `client.pull`.
+`kernel-metadata.json`. The server constructs a writable `OLLAMA_MODELS`
+directory, symlinks the attached read-only blobs, and copies the manifest
+instead of calling `client.pull`.
 
 CLI dataset creation was verified with the private smoke dataset:
 <https://www.kaggle.com/datasets/devabhirupdas/kaggle-llm-cache-smoke>.
@@ -130,7 +143,7 @@ Ollama blobs.
 
 ## Current limitations
 
-- A fresh kernel installs Ollama and downloads the model before serving.
+- A fresh kernel still installs Ollama and loads the cached model onto the GPU.
 - Kaggle CLI launches a committed batch kernel, not an interactive draft.
 - The documented CLI can inspect status/output but does not provide a reliable
   command for cancelling a live batch kernel.
