@@ -1,0 +1,69 @@
+#!/bin/zsh
+set -eu
+
+KERNEL="devabhirupdas/ollama-gemma-3n-remote-server"
+ENDPOINT="https://neurosis-washroom-gliding.ngrok-free.dev"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+SECRET_FILE="$SCRIPT_DIR/.secrets/ngrok.env"
+
+if [[ ! -f "$SECRET_FILE" ]]; then
+  echo "Missing $SECRET_FILE" >&2
+  exit 1
+fi
+
+source "$SECRET_FILE"
+if [[ -z "${NGROK_AUTHTOKEN:-}" ]]; then
+  echo "NGROK_AUTHTOKEN is empty" >&2
+  exit 1
+fi
+
+is_ready() {
+  curl -fsS --max-time 5 \
+    -H "ngrok-skip-browser-warning: true" \
+    "$ENDPOINT/api/tags" | grep -q '"name":"gemma3n:e4b"'
+}
+
+if is_ready; then
+  echo "Already running: $ENDPOINT"
+  exit 0
+fi
+
+kernel_dir="$(mktemp -d)"
+trap 'rm -rf "$kernel_dir"' EXIT
+cp "$SCRIPT_DIR/kernel-metadata.json" "$kernel_dir/"
+export NGROK_AUTHTOKEN
+python3 - "$SCRIPT_DIR/server.py" "$kernel_dir/server.py" <<'PY'
+import os
+import pathlib
+import sys
+
+source, destination = map(pathlib.Path, sys.argv[1:])
+rendered = source.read_text().replace(
+    "__NGROK_AUTHTOKEN__", os.environ["NGROK_AUTHTOKEN"]
+)
+if "__NGROK_AUTHTOKEN__" in rendered:
+    raise SystemExit("ngrok token placeholder was not replaced")
+destination.write_text(rendered)
+PY
+
+kaggle kernels push \
+  -p "$kernel_dir" \
+  --accelerator NvidiaTeslaT4 \
+  --timeout 43200
+
+for _ in {1..90}; do
+  if is_ready; then
+    echo "Ready: $ENDPOINT"
+    exit 0
+  fi
+
+  kernel_status="$(kaggle kernels status "$KERNEL" 2>&1 || true)"
+  echo "$kernel_status"
+  if [[ "$kernel_status" == *"ERROR"* ]]; then
+    exit 1
+  fi
+  sleep 10
+done
+
+echo "Server did not become ready within 15 minutes" >&2
+exit 1

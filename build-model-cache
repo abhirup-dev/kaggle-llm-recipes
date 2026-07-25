@@ -1,0 +1,33 @@
+#!/bin/zsh
+set -eu
+
+MODEL="${1:-gemma3n:e4b}"
+SLUG="${MODEL/:/-}"
+OLLAMA_STORE="${OLLAMA_MODELS:-$HOME/.ollama/models}"
+MANIFEST="$OLLAMA_STORE/manifests/registry.ollama.ai/library/${MODEL%%:*}/${MODEL#*:}"
+OUTPUT="${2:-dataset-$SLUG}"
+
+if [[ ! -f "$MANIFEST" ]]; then
+  echo "Pull $MODEL with Ollama first; manifest not found at $MANIFEST" >&2
+  exit 1
+fi
+
+mkdir -p "$OUTPUT"
+cp "$MANIFEST" "$OUTPUT/manifest.json"
+
+jq -r '.config.digest, .layers[].digest' "$MANIFEST" |
+  while read -r digest; do
+    cp "$OLLAMA_STORE/blobs/${digest/:/-}" "$OUTPUT/"
+  done
+
+cat >"$OUTPUT/dataset-metadata.json" <<EOF
+{
+  "id": "devabhirupdas/$SLUG-ollama-cache",
+  "title": "$MODEL Ollama Cache",
+  "licenses": [{"name": "other"}]
+}
+EOF
+
+echo "Prepared $OUTPUT"
+echo "Add the required Gemma notice/license files, then run:"
+echo "  kaggle datasets create -p $OUTPUT --keep-tabular"

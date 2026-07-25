@@ -1,0 +1,15 @@
+{
+  "id": "devabhirupdas/ollama-gemma-3n-remote-server",
+  "title": "Ollama Gemma 3n Remote Server",
+  "code_file": "server.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}
+
