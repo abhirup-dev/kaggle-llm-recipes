@@ -1,8 +1,0 @@
-This private dataset verifies unattended Kaggle dataset creation.
-
-The production cache will contain:
-- the Ollama Linux runtime tar
-- the gemma3n:e4b manifest
-- only the Ollama blobs referenced by that manifest
-- Gemma and Ollama license/notice files
-

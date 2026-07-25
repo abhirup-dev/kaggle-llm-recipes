@@ -1,6 +1,6 @@
 # Kaggle LLM Recipes
 
-Run Gemma 3n with Ollama on a private Kaggle GPU kernel and expose its
+Run Gemma 4 with Ollama on a private Kaggle GPU kernel and expose its
 Ollama API through a fixed ngrok domain.
 
 ## Start the server
@@ -17,13 +17,12 @@ Run:
 ./start-server
 ```
 
-The default `e2b-pull` profile downloads the 5.6 GB model directly because it
-was the fastest measured cold-start path. Other profiles:
+The default is the largest Gemma 4 quantization expected to remain fully
+GPU-resident across Kaggle's two 16 GB T4s:
 
 ```sh
-./start-server e2b       # attached 5.24 GB e2b cache
-./start-server e4b       # attached 7.55 GB e4b cache
-./start-server e2b-pull  # direct Ollama pull; same as the default
+./start-server                         # gemma4:31b-it-qat, 19 GB
+./start-server gemma4:26b-a4b-it-qat  # smaller/faster MoE alternative
 ```
 
 The command uploads a private Kaggle kernel, requests a T4 GPU, and waits up to
@@ -44,7 +43,7 @@ curl -sS https://neurosis-washroom-gliding.ngrok-free.dev/api/generate \
   -H 'Content-Type: application/json' \
   -H 'ngrok-skip-browser-warning: true' \
   -d '{
-    "model": "gemma3n:e2b",
+    "model": "gemma4:31b-it-qat",
     "prompt": "Reply with exactly: hello from Kaggle",
     "stream": false
   }'
@@ -61,13 +60,13 @@ curl -fsS \
 Inspect the batch run:
 
 ```sh
-kaggle kernels status devabhirupdas/ollama-gemma-3n-remote-server
-kaggle kernels output devabhirupdas/ollama-gemma-3n-remote-server -p outputs
+kaggle kernels status devabhirupdas/ollama-gemma-4-remote-server
+kaggle kernels output devabhirupdas/ollama-gemma-4-remote-server -p outputs
 ```
 
 Kernel page:
 
-<https://www.kaggle.com/code/devabhirupdas/ollama-gemma-3n-remote-server>
+<https://www.kaggle.com/code/devabhirupdas/ollama-gemma-4-remote-server>
 
 ## Cold-start comparison on Kaggle T4 x2
 
@@ -108,56 +107,51 @@ repository contains only a placeholder. Keep the generated Kaggle kernel
 private and rotate the token if that source becomes public. The exposed Ollama
 endpoint currently has no application-level authentication.
 
-## GitHub source and model cache datasets
+## Why the runtime has no datasets
 
-Kaggle can create a dataset from a public GitHub repository archive. The
-result is a versioned snapshot with the repository URL recorded as its remote
-source; it is not a live Git checkout. Use the dataset page's **Update** action
-after pushing repository changes:
+In the measured `gemma3n:e2b` comparison,
+direct `ollama pull` reached a real generation in 212.7 seconds versus 361.3
+seconds for an attached 5.24 GB cache. The e2b/e4b caches, cache smoke test,
+and GitHub-source snapshot were deleted after that result. GitHub is the
+canonical source and `kaggle kernels push` uploads the runtime directly.
 
-<https://www.kaggle.com/datasets/devabhirupdas/kaggle-llm-recipes-github-source>
+## Gemma 4 capacity
 
-Kaggle datasets are durable and attach read-only under `/kaggle/input`. A
-private dataset containing Ollama's manifest and referenced blobs removes the
-registry download, but the observed input-staging cost was larger. Keep caches
-as an offline/fallback option; direct pull is the recommended fast path.
+Kaggle provides two 16 GB T4 GPUs. Ollama automatically spreads a model across
+available GPUs when it cannot fit on one. `gemma4:31b-it-qat` is the largest
+parameter variant and its 19 GB artifact leaves enough aggregate VRAM for a
+small context and runtime overhead. The server fixes:
 
-Prepare the cache from a machine that already has the model:
+- context length: 4,096
+- KV cache: q8_0
+- parallel requests: 1
+- flash attention: enabled
 
-```sh
-ollama pull gemma3n:e4b
-./build-model-cache
-```
+Verified on 2026-07-25:
 
-Review and add the Gemma notice/terms before uploading:
+| Measurement | Result |
+|---|---:|
+| Push to successful cold generation | 340.73s |
+| Ollama installed | 34.899s |
+| Model pull complete | 187.741s |
+| Model warm complete | 335.087s |
+| Model artifact / VRAM | 18,938,006,076 bytes |
+| Warm request | 2.90s |
+| Warm prompt processing | 62.0 tok/s |
+| Warm generation | 12.65 tok/s |
 
-```sh
-kaggle datasets create \
-  -p dataset-gemma3n-e4b \
-  --keep-tabular
-```
-
-`start-server e4b` and `start-server e2b` attach the matching cache
-automatically. The server constructs a writable `OLLAMA_MODELS` directory,
-symlinks the attached read-only blobs, and copies the manifest instead of
-calling `client.pull`.
-
-CLI dataset creation was verified with the private smoke dataset:
-<https://www.kaggle.com/datasets/devabhirupdas/kaggle-llm-cache-smoke>.
-
-Store native runtime files and model blobs, not a Docker image: Kaggle kernels
-cannot replace their base image or run a privileged Docker daemon. A vLLM
-wheelhouse is possible but tightly coupled to Kaggle's Python, PyTorch, CUDA,
-and vLLM versions; vLLM also needs Transformers-format weights rather than
-Ollama blobs.
+Ollama reported `size_vram == size`, confirming the 30.7B Q4_0 model was
+fully GPU-resident rather than partially offloaded to CPU. The 20 GB
+`gemma4:31b-it-q4_K_M` should also fit, but the tested 19 GB QAT build leaves
+more safety margin. The 34 GB Q8 and 63 GB BF16 variants exceed the 32 GB
+aggregate VRAM before KV-cache/runtime overhead.
 
 ## Current limitations
 
-- A fresh kernel still installs Ollama and loads the cached model onto the GPU.
+- A fresh kernel installs Ollama, pulls the model, and loads it onto the GPUs.
 - Cold-start time varies with Kaggle scheduling and input staging; one run is
   directional rather than a full statistical benchmark.
 - Kaggle CLI launches a committed batch kernel, not an interactive draft.
 - The documented CLI can inspect status/output but does not provide a reliable
   command for cancelling a live batch kernel.
-- `gemma3n:e4b` handled text but rejected image input in testing.
 - Kaggle and ngrok availability, quotas, and policies still apply.

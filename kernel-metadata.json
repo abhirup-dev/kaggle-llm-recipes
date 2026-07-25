@@ -1,6 +1,6 @@
 {
-  "id": "devabhirupdas/ollama-gemma-3n-remote-server",
-  "title": "Ollama Gemma 3n Remote Server",
+  "id": "devabhirupdas/ollama-gemma-4-remote-server",
+  "title": "Ollama Gemma 4 Remote Server",
   "code_file": "server.py",
   "language": "python",
   "kernel_type": "script",

@@ -1,6 +1,5 @@
 import json
 import os
-import pathlib
 import shutil
 import subprocess
 import sys
@@ -9,13 +8,10 @@ import urllib.request
 
 
 MODEL = "__MODEL__"
-SOURCE_MODE = "__SOURCE_MODE__"
 PORT = 11434
 DOMAIN = "neurosis-washroom-gliding.ngrok-free.dev"
 NGROK_AUTHTOKEN = "__NGROK_AUTHTOKEN__"
 MAX_RUNTIME_SECONDS = 2 * 60 * 60
-CACHE_DIR = pathlib.Path("/kaggle/input/__CACHE_SLUG__")
-
 started = time.monotonic()
 stages = {}
 
@@ -44,36 +40,16 @@ from pyngrok import ngrok
 
 mark("python_dependencies_ready")
 
-model_store = pathlib.Path("/kaggle/working/ollama-models")
-blob_store = model_store / "blobs"
-if SOURCE_MODE == "cache":
-    manifest_source = CACHE_DIR / "manifest.json"
-    if not manifest_source.is_file():
-        raise FileNotFoundError(f"Missing cached model manifest: {manifest_source}")
-
-    model_name, model_tag = MODEL.split(":", 1)
-    manifest_store = (
-        model_store
-        / f"manifests/registry.ollama.ai/library/{model_name}/{model_tag}"
-    )
-    blob_store.mkdir(parents=True, exist_ok=True)
-    manifest_store.parent.mkdir(parents=True, exist_ok=True)
-    for blob in CACHE_DIR.glob("sha256-*"):
-        target = blob_store / blob.name
-        if not target.exists():
-            target.symlink_to(blob)
-    shutil.copy2(manifest_source, manifest_store)
-    mark("model_cache_linked")
-
 log = open("/kaggle/working/ollama.log", "w")
 server = subprocess.Popen(
     ["ollama", "serve"],
     env={
         **os.environ,
         "OLLAMA_HOST": f"127.0.0.1:{PORT}",
-        "OLLAMA_MODELS": str(model_store),
         "OLLAMA_CONTEXT_LENGTH": "4096",
         "OLLAMA_FLASH_ATTENTION": "true",
+        "OLLAMA_KV_CACHE_TYPE": "q8_0",
+        "OLLAMA_NUM_PARALLEL": "1",
     },
     stdout=log,
     stderr=subprocess.STDOUT,
@@ -100,10 +76,8 @@ tunnel = ngrok.connect(
 mark("tunnel_ready")
 
 client = ollama.Client(host=f"http://127.0.0.1:{PORT}")
-if SOURCE_MODE == "pull":
-    client.pull(MODEL)
-    mark("model_pulled")
-mark("model_source_ready")
+client.pull(MODEL)
+mark("model_pulled")
 client.generate(
     model=MODEL,
     prompt="Reply with exactly: ready",
