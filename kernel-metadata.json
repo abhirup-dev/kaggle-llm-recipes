@@ -7,10 +7,7 @@
   "is_private": true,
   "enable_gpu": true,
   "enable_internet": true,
-  "dataset_sources": [
-    "devabhirupdas/kaggle-llm-recipes-github-source",
-    "devabhirupdas/gemma3n-e4b-ollama-cache"
-  ],
+  "dataset_sources": [],
   "competition_sources": [],
   "kernel_sources": [],
   "model_sources": []

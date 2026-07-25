@@ -8,12 +8,13 @@ import time
 import urllib.request
 
 
-MODEL = "gemma3n:e4b"
+MODEL = "__MODEL__"
+SOURCE_MODE = "__SOURCE_MODE__"
 PORT = 11434
 DOMAIN = "neurosis-washroom-gliding.ngrok-free.dev"
 NGROK_AUTHTOKEN = "__NGROK_AUTHTOKEN__"
 MAX_RUNTIME_SECONDS = 2 * 60 * 60
-CACHE_DIR = pathlib.Path("/kaggle/input/gemma3n-e4b-ollama-cache")
+CACHE_DIR = pathlib.Path("/kaggle/input/__CACHE_SLUG__")
 
 started = time.monotonic()
 stages = {}
@@ -43,23 +44,26 @@ from pyngrok import ngrok
 
 mark("python_dependencies_ready")
 
-manifest_source = CACHE_DIR / "manifest.json"
-if not manifest_source.is_file():
-    raise FileNotFoundError(f"Missing cached model manifest: {manifest_source}")
-
 model_store = pathlib.Path("/kaggle/working/ollama-models")
 blob_store = model_store / "blobs"
-manifest_store = (
-    model_store / "manifests/registry.ollama.ai/library/gemma3n/e4b"
-)
-blob_store.mkdir(parents=True, exist_ok=True)
-manifest_store.parent.mkdir(parents=True, exist_ok=True)
-for blob in CACHE_DIR.glob("sha256-*"):
-    target = blob_store / blob.name
-    if not target.exists():
-        target.symlink_to(blob)
-shutil.copy2(manifest_source, manifest_store)
-mark("model_cache_linked")
+if SOURCE_MODE == "cache":
+    manifest_source = CACHE_DIR / "manifest.json"
+    if not manifest_source.is_file():
+        raise FileNotFoundError(f"Missing cached model manifest: {manifest_source}")
+
+    model_name, model_tag = MODEL.split(":", 1)
+    manifest_store = (
+        model_store
+        / f"manifests/registry.ollama.ai/library/{model_name}/{model_tag}"
+    )
+    blob_store.mkdir(parents=True, exist_ok=True)
+    manifest_store.parent.mkdir(parents=True, exist_ok=True)
+    for blob in CACHE_DIR.glob("sha256-*"):
+        target = blob_store / blob.name
+        if not target.exists():
+            target.symlink_to(blob)
+    shutil.copy2(manifest_source, manifest_store)
+    mark("model_cache_linked")
 
 log = open("/kaggle/working/ollama.log", "w")
 server = subprocess.Popen(
@@ -68,6 +72,8 @@ server = subprocess.Popen(
         **os.environ,
         "OLLAMA_HOST": f"127.0.0.1:{PORT}",
         "OLLAMA_MODELS": str(model_store),
+        "OLLAMA_CONTEXT_LENGTH": "4096",
+        "OLLAMA_FLASH_ATTENTION": "true",
     },
     stdout=log,
     stderr=subprocess.STDOUT,
@@ -94,7 +100,10 @@ tunnel = ngrok.connect(
 mark("tunnel_ready")
 
 client = ollama.Client(host=f"http://127.0.0.1:{PORT}")
-mark("model_cache_ready")
+if SOURCE_MODE == "pull":
+    client.pull(MODEL)
+    mark("model_pulled")
+mark("model_source_ready")
 client.generate(
     model=MODEL,
     prompt="Reply with exactly: ready",

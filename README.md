@@ -1,6 +1,6 @@
 # Kaggle LLM Recipes
 
-Run `gemma3n:e4b` with Ollama on a private Kaggle GPU kernel and expose its
+Run Gemma 3n with Ollama on a private Kaggle GPU kernel and expose its
 Ollama API through a fixed ngrok domain.
 
 ## Start the server
@@ -17,14 +17,14 @@ Run:
 ./start-server
 ```
 
-Verified on 2026-07-25: private kernel version 4 completed this flow without
-browser interaction and returned `unattended CLI inference works`.
+The default `e2b-pull` profile downloads the 5.6 GB model directly because it
+was the fastest measured cold-start path. Other profiles:
 
-The kernel attaches two private datasets:
-
-- `devabhirupdas/kaggle-llm-recipes-github-source`: a snapshot imported from
-  this GitHub repository
-- `devabhirupdas/gemma3n-e4b-ollama-cache`: the Ollama manifest and model blobs
+```sh
+./start-server e2b       # attached 5.24 GB e2b cache
+./start-server e4b       # attached 7.55 GB e4b cache
+./start-server e2b-pull  # direct Ollama pull; same as the default
+```
 
 The command uploads a private Kaggle kernel, requests a T4 GPU, and waits up to
 15 minutes for:
@@ -44,7 +44,7 @@ curl -sS https://neurosis-washroom-gliding.ngrok-free.dev/api/generate \
   -H 'Content-Type: application/json' \
   -H 'ngrok-skip-browser-warning: true' \
   -d '{
-    "model": "gemma3n:e4b",
+    "model": "gemma3n:e2b",
     "prompt": "Reply with exactly: hello from Kaggle",
     "stream": false
   }'
@@ -69,15 +69,25 @@ Kernel page:
 
 <https://www.kaggle.com/code/devabhirupdas/ollama-gemma-3n-remote-server>
 
-## Performance observed on Kaggle T4 x2
+## Cold-start comparison on Kaggle T4 x2
 
-| Scenario | Wall time | Input throughput | Output throughput |
+Both 2026-07-25 runs used `gemma3n:e2b`, a fresh private batch kernel, and
+stopped only after a real generation succeeded.
+
+| Model source | Push to first generation | In-kernel ready | Warm request |
 |---|---:|---:|---:|
-| Cold start through first answer | ~7m 11s | — | — |
-| First cold request | 121.6s | 0.35 tok/s | 29.7 tok/s |
-| Warm short text | 10.2s | 90.8 tok/s | 39.1 tok/s |
-| Warm long input | 7.7s | 1,084.5 tok/s | 38.8 tok/s |
-| Warm streaming | 5.1s; TTFT 1.54s | 127.7 tok/s | 39.6 tok/s |
+| Direct `ollama pull` | **212.7s** | 206.9s | 1.83s |
+| Attached cache + mmap | 361.3s | **188.4s** | 1.82s |
+
+The cache saved 18.5 seconds inside Python, but Kaggle spent about 173 seconds
+before the cached script began versus about 6 seconds for the pull run.
+Attaching 5.24 GB therefore made end-to-end startup 148.6 seconds slower in
+this comparison. Warm throughput was similar: about 240 input tok/s and
+41–46 output tok/s.
+
+An earlier cached `gemma3n:e4b` run became ready inside Python in 197.0
+seconds. The smaller `e2b` cache only saved 8.6 seconds because cold model
+loading and first generation dominate after the files are available.
 
 Ollama reports durations in nanoseconds:
 
@@ -108,9 +118,9 @@ after pushing repository changes:
 <https://www.kaggle.com/datasets/devabhirupdas/kaggle-llm-recipes-github-source>
 
 Kaggle datasets are durable and attach read-only under `/kaggle/input`. A
-private dataset containing Ollama's manifest and referenced blobs can remove
-the repeated 7.5 GB registry download. It does not remove the time needed to
-load the model onto the GPU.
+private dataset containing Ollama's manifest and referenced blobs removes the
+registry download, but the observed input-staging cost was larger. Keep caches
+as an offline/fallback option; direct pull is the recommended fast path.
 
 Prepare the cache from a machine that already has the model:
 
@@ -127,10 +137,10 @@ kaggle datasets create \
   --keep-tabular
 ```
 
-Attach it by adding the dataset slug to `dataset_sources` in
-`kernel-metadata.json`. The server constructs a writable `OLLAMA_MODELS`
-directory, symlinks the attached read-only blobs, and copies the manifest
-instead of calling `client.pull`.
+`start-server e4b` and `start-server e2b` attach the matching cache
+automatically. The server constructs a writable `OLLAMA_MODELS` directory,
+symlinks the attached read-only blobs, and copies the manifest instead of
+calling `client.pull`.
 
 CLI dataset creation was verified with the private smoke dataset:
 <https://www.kaggle.com/datasets/devabhirupdas/kaggle-llm-cache-smoke>.
@@ -144,6 +154,8 @@ Ollama blobs.
 ## Current limitations
 
 - A fresh kernel still installs Ollama and loads the cached model onto the GPU.
+- Cold-start time varies with Kaggle scheduling and input staging; one run is
+  directional rather than a full statistical benchmark.
 - Kaggle CLI launches a committed batch kernel, not an interactive draft.
 - The documented CLI can inspect status/output but does not provide a reliable
   command for cancelling a live batch kernel.

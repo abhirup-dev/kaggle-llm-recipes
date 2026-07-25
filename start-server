@@ -1,6 +1,32 @@
 #!/bin/zsh
 set -eu
 
+PROFILE="${1:-e2b-pull}"
+case "$PROFILE" in
+  e4b)
+    MODEL="gemma3n:e4b"
+    SOURCE_MODE="cache"
+    CACHE_SLUG="gemma3n-e4b-ollama-cache"
+    CACHE_DATASET="devabhirupdas/gemma3n-e4b-ollama-cache"
+    ;;
+  e2b)
+    MODEL="gemma3n:e2b"
+    SOURCE_MODE="cache"
+    CACHE_SLUG="gemma3n-e2b-ollama-cache"
+    CACHE_DATASET="devabhirupdas/gemma3n-e2b-ollama-cache"
+    ;;
+  e2b-pull)
+    MODEL="gemma3n:e2b"
+    SOURCE_MODE="pull"
+    CACHE_SLUG=""
+    CACHE_DATASET=""
+    ;;
+  *)
+    echo "Usage: $0 [e4b|e2b|e2b-pull]" >&2
+    exit 2
+    ;;
+esac
+
 KERNEL="devabhirupdas/ollama-gemma-3n-remote-server"
 ENDPOINT="https://neurosis-washroom-gliding.ngrok-free.dev"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -20,7 +46,14 @@ fi
 is_ready() {
   curl -fsS --max-time 5 \
     -H "ngrok-skip-browser-warning: true" \
-    "$ENDPOINT/api/tags" | grep -q '"name":"gemma3n:e4b"'
+    "$ENDPOINT/api/tags" | grep -q "\"name\":\"$MODEL\"" || return 1
+
+  curl -fsS --max-time 180 \
+    -H "Content-Type: application/json" \
+    -H "ngrok-skip-browser-warning: true" \
+    "$ENDPOINT/api/generate" \
+    -d "{\"model\":\"$MODEL\",\"prompt\":\"Reply with one word: ready\",\"stream\":false,\"options\":{\"temperature\":0,\"num_predict\":2}}" |
+    grep -q '"done":true'
 }
 
 if is_ready; then
@@ -30,20 +63,34 @@ fi
 
 kernel_dir="$(mktemp -d)"
 trap 'rm -rf "$kernel_dir"' EXIT
-cp "$SCRIPT_DIR/kernel-metadata.json" "$kernel_dir/"
-export NGROK_AUTHTOKEN
-python3 - "$SCRIPT_DIR/server.py" "$kernel_dir/server.py" <<'PY'
+export NGROK_AUTHTOKEN MODEL SOURCE_MODE CACHE_SLUG CACHE_DATASET
+python3 - \
+  "$SCRIPT_DIR/server.py" \
+  "$kernel_dir/server.py" \
+  "$SCRIPT_DIR/kernel-metadata.json" \
+  "$kernel_dir/kernel-metadata.json" <<'PY'
 import os
 import pathlib
 import sys
 
-source, destination = map(pathlib.Path, sys.argv[1:])
-rendered = source.read_text().replace(
-    "__NGROK_AUTHTOKEN__", os.environ["NGROK_AUTHTOKEN"]
+server_source, server_destination, metadata_source, metadata_destination = map(
+    pathlib.Path, sys.argv[1:]
 )
-if "__NGROK_AUTHTOKEN__" in rendered:
-    raise SystemExit("ngrok token placeholder was not replaced")
-destination.write_text(rendered)
+server = (
+    server_source.read_text()
+    .replace("__NGROK_AUTHTOKEN__", os.environ["NGROK_AUTHTOKEN"])
+    .replace("__MODEL__", os.environ["MODEL"])
+    .replace("__SOURCE_MODE__", os.environ["SOURCE_MODE"])
+    .replace("__CACHE_SLUG__", os.environ["CACHE_SLUG"])
+)
+metadata = __import__("json").loads(metadata_source.read_text())
+if os.environ["CACHE_DATASET"]:
+    metadata["dataset_sources"].append(os.environ["CACHE_DATASET"])
+metadata = __import__("json").dumps(metadata, indent=2) + "\n"
+if "__" in server:
+    raise SystemExit("kernel template placeholder was not replaced")
+server_destination.write_text(server)
+metadata_destination.write_text(metadata)
 PY
 
 kaggle kernels push \
