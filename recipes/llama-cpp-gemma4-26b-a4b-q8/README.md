@@ -14,11 +14,50 @@ llama.cpp's native token timings.
 - Private dataset: <https://www.kaggle.com/datasets/devabhirupdas/gemma-4-26b-a4b-ud-q8-gguf>
 - Server kernel: <https://www.kaggle.com/code/devabhirupdas/llama-cpp-gemma-4-26b-a4b-dynamic-q8-server>
 - Direct dataset uploader: <https://www.kaggle.com/code/devabhirupdas/gemma-4-q8-direct-dataset-uploader>
-- Download benchmark: <https://www.kaggle.com/code/devabhirupdas/gemma-4-q8-hugging-face-download-benchmark>
 - llama.cpp build: `ai-dock/llama.cpp-cuda` tag `b10107`
 
 The runtime requests full GPU offload, a 4,096-token context, q8 KV cache,
 one request slot, flash attention, and an even layer split across two T4s.
+
+## Final decided architecture
+
+1. Provision the private Kaggle Dataset once with the CPU-only direct uploader.
+   It streams Hugging Face into Kaggle without staging the 27.6 GB GGUF on the
+   notebook's 19.5 GB writable disk.
+2. Attach that immutable dataset to the private T4×2 server kernel.
+3. Memory-map the GGUF and start the pinned CUDA `llama-server`.
+4. Warm the model locally before publishing the fixed ngrok endpoint.
+5. Query `/v1/chat/completions` and read llama.cpp's native `timings` object.
+6. Stop the kernel when testing is complete; the two-hour guard is a fallback.
+
+Dataset mode is the operational default. Authenticated Hugging Face mode and
+the download benchmark remain in this repository only for reproducibility.
+
+## Quota-aware scheduling
+
+Kaggle CLI 2.2.1 and newer exposes accelerator quota as machine-readable JSON:
+
+```sh
+kaggle quota --format json
+```
+
+At validation time, this account had 27.12 of 30.00 GPU hours remaining and
+the quota refreshed at `2026-08-01T00:00:00`. A scheduler can require two
+remaining GPU hours before launching:
+
+```sh
+kaggle quota --format json |
+  jq -e --argjson minimum 2 '
+    any(.[];
+      .resource == "GPU" and
+      (.remaining | rtrimstr("h") | tonumber) >= $minimum
+    )
+  '
+```
+
+The command exits successfully only when the threshold is met. The JSON also
+contains `used`, `total`, and `refreshAt`, so a scheduler can defer its next
+attempt until the reset timestamp. This removes the need to scrape Kaggle's UI.
 
 ## Start and query
 
@@ -169,6 +208,17 @@ gauges, including `llamacpp:prompt_tokens_total`,
 - The server self-terminates after two hours.
 - Both GPU benchmark sessions were manually stopped and verified as
   `CANCEL_ACKNOWLEDGED`.
+
+## Deleted Kaggle experiments
+
+The repository retains their measurements and scripts, but these superseded
+Kaggle kernels were deleted on 2026-07-26:
+
+- `gemma-4-q8-dataset-provisioner`
+- `gemma-4-q8-hugging-face-download-benchmark`
+- `ollama-gemma-4-remote-server`
+- `setup-and-query-a-ollama-server-ada1c5`
+- `setup-and-query-a-ollama-server`
 
 Sources:
 

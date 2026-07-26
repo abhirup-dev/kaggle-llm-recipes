@@ -1,14 +1,29 @@
 # Kaggle LLM Recipes
 
-Run Gemma 4 with Ollama on a private Kaggle GPU kernel and expose its
-Ollama API through a fixed ngrok domain.
+Host Gemma 4 on a private Kaggle GPU kernel and query it from a local machine.
 
-The separate llama.cpp recipe for Unsloth Gemma 4 26B A4B Dynamic Q8,
-including its private model dataset, OpenAI-compatible endpoint, cold-start
-comparison, and token-throughput measurements, is documented in
+## Recommended recipe
+
+The crystallized setup is the llama.cpp recipe for Unsloth Gemma 4 26B A4B
+Dynamic Q8. It uses a private Kaggle Dataset for the fixed GGUF, exposes an
+OpenAI-compatible endpoint through ngrok, and includes the measured cold-start
+and token-throughput results:
+
 [`recipes/llama-cpp-gemma4-26b-a4b-q8/README.md`](recipes/llama-cpp-gemma4-26b-a4b-q8/README.md).
 
-## Start the server
+Start it with:
+
+```sh
+./recipes/llama-cpp-gemma4-26b-a4b-q8/start-server
+```
+
+## Legacy Ollama recipe
+
+The original Ollama setup remains below as the experimental record. Its Kaggle
+kernels and cache datasets were deleted after the llama.cpp dataset-backed
+recipe became the selected approach.
+
+### Start the server
 
 Prerequisites:
 
@@ -41,7 +56,7 @@ The kernel shuts itself down after two hours so an abandoned run does not keep
 using GPU quota. Change `MAX_RUNTIME_SECONDS` in `server.py` when a different
 bound is needed.
 
-## Query from the Mac
+### Query from the Mac
 
 ```sh
 curl -sS https://neurosis-washroom-gliding.ngrok-free.dev/api/generate \
@@ -73,7 +88,7 @@ Kernel page:
 
 <https://www.kaggle.com/code/devabhirupdas/ollama-gemma-4-remote-server>
 
-## Cold-start comparison on Kaggle T4 x2
+### Cold-start comparison on Kaggle T4 x2
 
 Both 2026-07-25 runs used `gemma3n:e2b`, a fresh private batch kernel, and
 stopped only after a real generation succeeded.
@@ -100,7 +115,7 @@ prompt tokens/s = prompt_eval_count / prompt_eval_duration * 1e9
 output tokens/s = eval_count / eval_duration * 1e9
 ```
 
-## Security
+### Security
 
 This is deliberately the simplest unattended setup: `start-server` renders the
 ngrok token into the temporary private Kaggle kernel source because Kaggle CLI
@@ -112,7 +127,7 @@ repository contains only a placeholder. Keep the generated Kaggle kernel
 private and rotate the token if that source becomes public. The exposed Ollama
 endpoint currently has no application-level authentication.
 
-## Why the runtime has no datasets
+### Why the Ollama runtime has no datasets
 
 In the measured `gemma3n:e2b` comparison,
 direct `ollama pull` reached a real generation in 212.7 seconds versus 361.3
@@ -120,7 +135,7 @@ seconds for an attached 5.24 GB cache. The e2b/e4b caches, cache smoke test,
 and GitHub-source snapshot were deleted after that result. GitHub is the
 canonical source and `kaggle kernels push` uploads the runtime directly.
 
-## Gemma 4 capacity
+### Gemma 4 capacity
 
 Kaggle provides two 16 GB T4 GPUs. Ollama automatically spreads a model across
 available GPUs when it cannot fit on one. `gemma4:31b-it-qat` is the largest
@@ -151,7 +166,7 @@ fully GPU-resident rather than partially offloaded to CPU. The 20 GB
 more safety margin. The 34 GB Q8 and 63 GB BF16 variants exceed the 32 GB
 aggregate VRAM before KV-cache/runtime overhead.
 
-## Current limitations
+### Current limitations
 
 - A fresh kernel installs Ollama, pulls the model, and loads it onto the GPUs.
 - Cold-start time varies with Kaggle scheduling and input staging; one run is
