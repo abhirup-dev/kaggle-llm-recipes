@@ -1,0 +1,61 @@
+#!/bin/zsh
+set -eu
+
+KERNEL="devabhirupdas/gemma-4-q8-direct-dataset-uploader"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+source "$ROOT_DIR/.secrets/huggingface.env"
+KAGGLE_API_TOKEN="$(kaggle auth print-access-token)"
+export HF_TOKEN KAGGLE_API_TOKEN
+
+kernel_dir="$(mktemp -d)"
+output_dir="$(mktemp -d)"
+python3 - \
+  "$SCRIPT_DIR/upload-dataset-stream.py" \
+  "$kernel_dir/upload-dataset-stream.py" \
+  "$SCRIPT_DIR/dataset-upload-metadata.json" \
+  "$kernel_dir/kernel-metadata.json" <<'PY'
+import os
+import pathlib
+import sys
+
+script_source, script_destination, metadata_source, metadata_destination = map(
+    pathlib.Path, sys.argv[1:]
+)
+script = (
+    script_source.read_text()
+    .replace("__HF_TOKEN__", os.environ["HF_TOKEN"])
+    .replace("__KAGGLE_API_TOKEN__", os.environ["KAGGLE_API_TOKEN"])
+)
+if "__HF_TOKEN__" in script or "__KAGGLE_API_TOKEN__" in script:
+    raise SystemExit("kernel template placeholder was not replaced")
+script_destination.write_text(script)
+metadata_destination.write_text(metadata_source.read_text())
+PY
+
+kaggle kernels push -p "$kernel_dir" --timeout 7200
+
+for _ in {1..720}; do
+  kernel_status="$(kaggle kernels status "$KERNEL" 2>&1 || true)"
+  echo "$kernel_status"
+  if [[ "$kernel_status" == *"COMPLETE"* ]]; then
+    kaggle kernels output "$KERNEL" \
+      -p "$output_dir" \
+      --file-pattern '.*\.log$' \
+      -q
+    rg 'STREAM_UPLOAD|DATASET_CREATED' "$output_dir" | tail -20
+    exit 0
+  fi
+  if [[ "$kernel_status" == *"ERROR"* ]]; then
+    kaggle kernels output "$KERNEL" \
+      -p "$output_dir" \
+      --file-pattern '.*\.log$' \
+      -q || true
+    rg 'Traceback|HTTP|error|Error' "$output_dir" || true
+    exit 1
+  fi
+  sleep 10
+done
+
+echo "Dataset upload did not finish within 120 minutes" >&2
+exit 1

@@ -1,0 +1,13 @@
+{
+  "id": "devabhirupdas/gemma-4-q8-direct-dataset-uploader",
+  "title": "Gemma 4 Q8 Direct Dataset Uploader",
+  "code_file": "upload-dataset-stream.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": []
+}

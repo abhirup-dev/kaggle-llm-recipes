@@ -1,0 +1,56 @@
+#!/bin/zsh
+set -eu
+
+KERNEL="devabhirupdas/gemma-4-q8-hugging-face-download-benchmark"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+SECRET_FILE="$ROOT_DIR/.secrets/huggingface.env"
+
+[[ -f "$SECRET_FILE" ]] || { echo "Missing $SECRET_FILE" >&2; exit 1; }
+source "$SECRET_FILE"
+[[ -n "${HF_TOKEN:-}" ]] || { echo "HF_TOKEN is empty" >&2; exit 1; }
+
+kernel_dir="$(mktemp -d)"
+output_dir="$(mktemp -d)"
+trap 'rm -rf "$kernel_dir" "$output_dir"' EXIT
+export HF_TOKEN
+python3 - \
+  "$SCRIPT_DIR/download-benchmark.py" \
+  "$kernel_dir/download-benchmark.py" \
+  "$SCRIPT_DIR/download-benchmark-metadata.json" \
+  "$kernel_dir/kernel-metadata.json" <<'PY'
+import os
+import pathlib
+import sys
+
+script_source, script_destination, metadata_source, metadata_destination = map(
+    pathlib.Path, sys.argv[1:]
+)
+script = script_source.read_text().replace("__HF_TOKEN__", os.environ["HF_TOKEN"])
+if "__HF_TOKEN__" in script:
+    raise SystemExit("kernel template placeholder was not replaced")
+script_destination.write_text(script)
+metadata_destination.write_text(metadata_source.read_text())
+PY
+
+kaggle kernels push -p "$kernel_dir" --timeout 7200
+
+for _ in {1..360}; do
+  kernel_status="$(kaggle kernels status "$KERNEL" 2>&1 || true)"
+  echo "$kernel_status"
+  if [[ "$kernel_status" == *"COMPLETE"* ]]; then
+    kaggle kernels output "$KERNEL" \
+      -p "$output_dir" \
+      --file-pattern '.*\.log$' \
+      -q
+    rg 'HF_DOWNLOAD_BENCHMARK' "$output_dir"
+    exit 0
+  fi
+  if [[ "$kernel_status" == *"ERROR"* ]]; then
+    exit 1
+  fi
+  sleep 10
+done
+
+echo "Download benchmark did not finish within 60 minutes" >&2
+exit 1

@@ -1,0 +1,101 @@
+#!/bin/zsh
+set -eu
+
+MODEL_SOURCE_MODE="${1:-dataset}"
+[[ "$MODEL_SOURCE_MODE" == dataset || "$MODEL_SOURCE_MODE" == hf ]] || {
+  echo "Usage: $0 [dataset|hf]" >&2
+  exit 2
+}
+KERNEL="devabhirupdas/llama-cpp-gemma-4-26b-a4b-dynamic-q8-server"
+MODEL="gemma4-26b-a4b-ud-q8"
+ENDPOINT="https://neurosis-washroom-gliding.ngrok-free.dev"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+SECRET_FILE="$ROOT_DIR/.secrets/ngrok.env"
+HF_SECRET_FILE="$ROOT_DIR/.secrets/huggingface.env"
+
+for secret_file in "$SECRET_FILE"; do
+  [[ -f "$secret_file" ]] || { echo "Missing $secret_file" >&2; exit 1; }
+  source "$secret_file"
+done
+HF_TOKEN=unused
+if [[ "$MODEL_SOURCE_MODE" == hf ]]; then
+  source "$HF_SECRET_FILE"
+fi
+
+if [[ -z "${NGROK_AUTHTOKEN:-}" ]]; then
+  echo "NGROK_AUTHTOKEN is empty" >&2
+  exit 1
+fi
+is_ready() {
+  curl -fsS --max-time 5 \
+    -H "ngrok-skip-browser-warning: true" \
+    "$ENDPOINT/health" >/dev/null || return 1
+
+  curl -fsS --max-time 300 \
+    -H "Content-Type: application/json" \
+    -H "ngrok-skip-browser-warning: true" \
+    "$ENDPOINT/v1/chat/completions" \
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: ready\"}],\"temperature\":1.0,\"top_p\":0.95,\"max_tokens\":96}" |
+    python3 -c 'import json,sys; assert json.load(sys.stdin)["choices"][0]["message"]["content"].strip()'
+}
+
+if is_ready; then
+  echo "Already running: $ENDPOINT"
+  exit 0
+fi
+
+kernel_dir="$(mktemp -d)"
+trap 'rm -rf "$kernel_dir"' EXIT
+export NGROK_AUTHTOKEN HF_TOKEN MODEL_SOURCE_MODE
+python3 - \
+  "$SCRIPT_DIR/server.py" \
+  "$kernel_dir/server.py" \
+  "$SCRIPT_DIR/kernel-metadata.json" \
+  "$kernel_dir/kernel-metadata.json" <<'PY'
+import os
+import pathlib
+import json
+import sys
+
+server_source, server_destination, metadata_source, metadata_destination = map(
+    pathlib.Path, sys.argv[1:]
+)
+server = (
+    server_source.read_text()
+    .replace("__NGROK_AUTHTOKEN__", os.environ["NGROK_AUTHTOKEN"])
+    .replace("__HF_TOKEN__", os.environ["HF_TOKEN"])
+    .replace("__MODEL_SOURCE_MODE__", os.environ["MODEL_SOURCE_MODE"])
+)
+if any(placeholder in server for placeholder in (
+    "__NGROK_AUTHTOKEN__", "__HF_TOKEN__", "__MODEL_SOURCE_MODE__"
+)):
+    raise SystemExit("kernel template placeholder was not replaced")
+server_destination.write_text(server)
+metadata = json.loads(metadata_source.read_text())
+if os.environ["MODEL_SOURCE_MODE"] == "hf":
+    metadata["dataset_sources"] = []
+metadata_destination.write_text(json.dumps(metadata))
+PY
+
+kaggle kernels push \
+  -p "$kernel_dir" \
+  --accelerator NvidiaTeslaT4 \
+  --timeout 43200
+
+for _ in {1..180}; do
+  if is_ready; then
+    echo "Ready: $ENDPOINT"
+    exit 0
+  fi
+
+  kernel_status="$(kaggle kernels status "$KERNEL" 2>&1 || true)"
+  echo "$kernel_status"
+  if [[ "$kernel_status" == *"ERROR"* ]]; then
+    exit 1
+  fi
+  sleep 10
+done
+
+echo "Server did not become ready within 30 minutes" >&2
+exit 1

@@ -1,0 +1,13 @@
+{
+  "id": "devabhirupdas/gemma-4-q8-hugging-face-download-benchmark",
+  "title": "Gemma 4 Q8 Hugging Face Download Benchmark",
+  "code_file": "download-benchmark.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": []
+}

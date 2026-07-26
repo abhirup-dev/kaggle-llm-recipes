@@ -3,6 +3,11 @@
 Run Gemma 4 with Ollama on a private Kaggle GPU kernel and expose its
 Ollama API through a fixed ngrok domain.
 
+The separate llama.cpp recipe for Unsloth Gemma 4 26B A4B Dynamic Q8,
+including its private model dataset, OpenAI-compatible endpoint, cold-start
+comparison, and token-throughput measurements, is documented in
+[`recipes/llama-cpp-gemma4-26b-a4b-q8/README.md`](recipes/llama-cpp-gemma4-26b-a4b-q8/README.md).
+
 ## Start the server
 
 Prerequisites:

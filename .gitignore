@@ -3,3 +3,4 @@ __pycache__/
 outputs/
 dataset-gemma*/
 .secrets/
+.upload-cache/

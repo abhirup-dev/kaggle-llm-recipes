@@ -1,0 +1,16 @@
+{
+  "id": "devabhirupdas/llama-cpp-gemma-4-26b-a4b-dynamic-q8-server",
+  "title": "llama.cpp Gemma 4 26B A4B Dynamic Q8 Server",
+  "code_file": "server.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [
+    "devabhirupdas/gemma-4-26b-a4b-ud-q8-gguf"
+  ],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

@@ -1,0 +1,11 @@
+#!/bin/zsh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+source "$ROOT_DIR/.secrets/huggingface.env"
+KAGGLE_API_TOKEN="$(kaggle auth print-access-token)"
+export HF_TOKEN KAGGLE_API_TOKEN
+
+exec /Users/abhirupdas/.local/share/uv/tools/kaggle/bin/python \
+  "$SCRIPT_DIR/upload-dataset-stream.py"
