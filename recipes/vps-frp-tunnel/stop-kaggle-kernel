@@ -1,0 +1,48 @@
+#!/bin/zsh
+set -eu
+
+if [[ "${1:-}" == "--running" ]]; then
+  search="${2:?Usage: $0 --running SEARCH}"
+  refs=("${(@f)$(kaggle kernels list --mine --search "$search" --page-size 100 --csv |
+    awk -F, 'NR > 1 { print $1 }')}")
+  stopped=0
+  for ref in "${refs[@]}"; do
+    kernel_status="$(kaggle kernels status "$ref" 2>/dev/null || true)"
+    if [[ "$kernel_status" == *KernelWorkerStatus.RUNNING* ||
+          "$kernel_status" == *KernelWorkerStatus.QUEUED* ||
+          "$kernel_status" == *KernelWorkerStatus.CANCEL_REQUESTED* ]]; then
+      "$0" "$ref"
+      (( stopped += 1 ))
+    fi
+  done
+  echo "STOPPED_RUNNING $stopped"
+  exit 0
+fi
+
+KAGGLE_REF="${1:?Usage: $0 OWNER/SLUG | --running SEARCH}"
+[[ "$KAGGLE_REF" =~ '^[A-Za-z0-9_-]+/[A-Za-z0-9_-]+$' ]] || {
+  echo "Invalid Kaggle kernel ref: $KAGGLE_REF" >&2
+  exit 2
+}
+
+kernel_exists() {
+  kaggle kernels list --mine --search "${KAGGLE_REF#*/}" --page-size 100 --csv |
+    awk -F, -v ref="$KAGGLE_REF" '$1 == ref { found=1 } END { exit !found }'
+}
+
+if ! kernel_exists; then
+  echo "KERNEL_ABSENT $KAGGLE_REF"
+  exit 0
+fi
+
+kaggle kernels delete "$KAGGLE_REF" --yes
+for _ in {1..30}; do
+  if ! kernel_exists; then
+    echo "DELETE_ACKNOWLEDGED $KAGGLE_REF"
+    exit 0
+  fi
+  sleep 2
+done
+
+echo "Timed out waiting for Kaggle to delete $KAGGLE_REF" >&2
+exit 1

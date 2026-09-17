@@ -1,0 +1,8 @@
+#!/bin/zsh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+SESSION=kaggle-gemma-openai-compat \
+LOCAL_PORT="${LOCAL_PORT:-14101}" \
+  "$SCRIPT_DIR/stop-mac-tunnel"

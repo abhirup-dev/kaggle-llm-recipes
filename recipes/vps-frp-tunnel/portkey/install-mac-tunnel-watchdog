@@ -1,0 +1,16 @@
+#!/bin/zsh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+LABEL=dev.kaggle-llm.gateway-tunnels
+SOURCE="$SCRIPT_DIR/macos/$LABEL.plist"
+TARGET="$HOME/Library/LaunchAgents/$LABEL.plist"
+DOMAIN="gui/$(id -u)"
+
+mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.local/state/vpn-gateway"
+ln -sfn "$SOURCE" "$TARGET"
+if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+  launchctl bootout "$DOMAIN/$LABEL"
+fi
+launchctl bootstrap "$DOMAIN" "$SOURCE"
+echo "Installed Kaggle gateway tunnel watchdog: $LABEL"

@@ -1,0 +1,14 @@
+{
+  "id": "codebuddha/llama-cpp-qwen3-embedding-4b-q4-server",
+  "title": "llama.cpp Qwen3 Embedding 4B Q4 Server",
+  "code_file": "server.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

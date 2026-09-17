@@ -1,0 +1,20 @@
+services:
+  relay:
+    image: fluent/fluent-bit:5.0.9
+    container_name: kaggle-log-relay
+    restart: unless-stopped
+    entrypoint: ["/fluent-bit/bin/fluent-bit"]
+    command: ["--config", "/fluent-bit/etc/fluent-bit.conf"]
+    env_file: .env
+    ports:
+      - "${LOG_RELAY_PORT:-24224}:24224/tcp"
+    volumes:
+      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - ./certs:/certs:ro
+      - ./buffer:/buffers
+      - /home/abhirup/kaggle-logs:/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"

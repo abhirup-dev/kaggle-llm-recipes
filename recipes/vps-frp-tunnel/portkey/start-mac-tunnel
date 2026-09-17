@@ -1,0 +1,46 @@
+#!/bin/zsh
+set -eu
+
+SESSION="${SESSION:-kaggle-portkey-gateway}"
+LOCAL_PORT="${LOCAL_PORT:-14100}"
+REMOTE_PORT="${REMOTE_PORT:-14100}"
+VPS_TAILSCALE_IP="${VPS_TAILSCALE_IP:-100.96.245.110}"
+SSH_ALIAS="${SSH_ALIAS:-vpsgtw}"
+SOCKS_PORT="${SOCKS_PORT:-13080}"
+
+tmux has-session -t "$SESSION" 2>/dev/null && {
+  echo "Already running on http://127.0.0.1:$LOCAL_PORT"
+  exit 0
+}
+lsof -nP -iTCP:"$LOCAL_PORT" -sTCP:LISTEN >/dev/null 2>&1 && {
+  curl -fsS --max-time 2 "http://127.0.0.1:$LOCAL_PORT/" >/dev/null && {
+    echo "Already running on http://127.0.0.1:$LOCAL_PORT"
+    exit 0
+  }
+  echo "Local port $LOCAL_PORT is already in use" >&2
+  exit 1
+}
+
+command=(
+  env AUTOSSH_GATETIME=0 autossh -M 0 -N
+  -o "ProxyCommand=nc -w 30 -X 5 -x 127.0.0.1:$SOCKS_PORT %h %p"
+  -o BatchMode=yes
+  -o ExitOnForwardFailure=yes
+  -o ServerAliveInterval=15
+  -o ServerAliveCountMax=3
+  -L "127.0.0.1:$LOCAL_PORT:$VPS_TAILSCALE_IP:$REMOTE_PORT"
+  "$SSH_ALIAS"
+)
+printf -v shell_command '%q ' "${command[@]}"
+tmux new-session -d -s "$SESSION" "$shell_command"
+
+for _ in {1..20}; do
+  if curl -fsS --max-time 2 "http://127.0.0.1:$LOCAL_PORT/" >/dev/null; then
+    echo "Portkey ready: http://127.0.0.1:$LOCAL_PORT"
+    exit 0
+  fi
+  sleep 0.5
+done
+
+tmux capture-pane -p -t "$SESSION" -S -30 >&2 || true
+exit 1

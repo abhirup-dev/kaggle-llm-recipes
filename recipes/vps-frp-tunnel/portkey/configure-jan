@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Add protocol-specific, client-routed Portkey providers to Jan."""
+
+import argparse
+import datetime
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+import tempfile
+
+
+def setting(key: str, title: str, value: str, password: bool = False) -> dict:
+    return {
+        "key": key,
+        "title": title,
+        "description": f"{title} for the Mac-local Portkey gateway.",
+        "controller_type": "input",
+        "controller_props": {
+            "placeholder": value,
+            "value": value,
+            "type": "password" if password else "text",
+        },
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", action="append", dest="models")
+    parser.add_argument("--port", action="append", type=int, dest="ports")
+    parser.add_argument("--base-url", default="http://127.0.0.1:14100/v1")
+    parser.add_argument("--bridge-host", default="172.30.0.1")
+    parser.add_argument(
+        "--settings",
+        type=pathlib.Path,
+        default=pathlib.Path.home() / "jan/settings.json",
+    )
+    args = parser.parse_args()
+    models = args.models or ["gemma4-26b-a4b-ud-q8"]
+    ports = args.ports or [19101]
+    if any(port not in range(19101, 19200) for port in ports):
+        raise SystemExit("FRP backend ports must be in the VPS range 19101-19199")
+    if subprocess.run(["pgrep", "-x", "Jan"], capture_output=True).returncode == 0:
+        raise SystemExit("Quit Jan before updating its provider configuration")
+
+    document = json.loads(args.settings.read_text())
+    model_provider = json.loads(document["model-provider"])
+    providers = model_provider["state"]["providers"]
+    names = {"Kaggle VPS OpenAI", "Kaggle VPS Anthropic"}
+    providers[:] = [provider for provider in providers if provider.get("provider") not in names]
+
+    jan_models = [
+        {
+            "id": model,
+            "model": model,
+            "name": model,
+            "capabilities": ["completion"],
+            "version": "1.0",
+        }
+        for model in models
+    ]
+
+    def portkey_config(protocol: str) -> str:
+        config = {
+            "strategy": {"mode": "loadbalance"},
+            "targets": [
+                {
+                    "provider": protocol,
+                    "api_key": "no-key",
+                    "custom_host": f"http://{args.bridge_host}:{port}/v1",
+                    "weight": 1,
+                }
+                for port in ports
+            ],
+        }
+        return json.dumps(config, separators=(",", ":"))
+
+    common = {
+        "active": True,
+        "base_url": args.base_url,
+        "models": jan_models,
+        "settings": [
+            setting("api-key", "API Key", "no-key", password=True),
+            setting("base-url", "Base URL", args.base_url),
+        ],
+    }
+    providers.extend(
+        [
+            {
+                **common,
+                "provider": "Kaggle VPS OpenAI",
+                "custom_header": [
+                    {"header": "x-portkey-config", "value": portkey_config("openai")}
+                ],
+            },
+            {
+                **common,
+                "provider": "Kaggle VPS Anthropic",
+                "api_type": "anthropic",
+                "custom_header": [
+                    {"header": "anthropic-version", "value": "2023-06-01"},
+                    {
+                        "header": "anthropic-dangerous-direct-browser-access",
+                        "value": "true",
+                    },
+                    {"header": "x-portkey-config", "value": portkey_config("anthropic")},
+                ],
+            },
+        ]
+    )
+    document["model-provider"] = json.dumps(model_provider, separators=(",", ":"))
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = args.settings.with_name(f"{args.settings.name}.backup-{timestamp}")
+    shutil.copy2(args.settings, backup)
+    with tempfile.NamedTemporaryFile(
+        "w", dir=args.settings.parent, delete=False
+    ) as temporary:
+        json.dump(document, temporary, indent=2)
+        temporary.write("\n")
+        temporary_path = pathlib.Path(temporary.name)
+    os.replace(temporary_path, args.settings)
+    print(f"Configured {', '.join(sorted(names))} for {', '.join(models)}")
+    print(f"Backup: {backup}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,10 @@
+#!/bin/zsh
+set -eu
+
+VPS_HOST="${VPS_HOST:-vpsme}"
+REMOTE_DIR="${REMOTE_DIR:-/home/abhirup/kaggle-openai-compat}"
+
+ssh "$VPS_HOST" "\
+  set -eu
+  cd '$REMOTE_DIR'
+  docker compose down"

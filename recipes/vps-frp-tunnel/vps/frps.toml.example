@@ -1,0 +1,13 @@
+bindAddr = "0.0.0.0"
+bindPort = 7443
+proxyBindAddr = "127.0.0.1"
+auth.method = "token"
+auth.tokenSource.type = "file"
+auth.tokenSource.file.path = "/opt/vps-frp-tunnel/token"
+transport.tls.force = true
+transport.maxPoolCount = 5
+allowPorts = [{ start = 19101, end = 19199 }]
+maxPortsPerClient = 4
+log.to = "/var/log/vps-frp-tunnel/frps.log"
+log.level = "info"
+log.maxDays = 7

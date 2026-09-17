@@ -1,0 +1,20 @@
+[Unit]
+Description=Isolated FRP reverse-tunnel server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vps-frp-tunnel
+Group=vps-frp-tunnel
+ExecStart=/opt/vps-frp-tunnel/frps -c /opt/vps-frp-tunnel/frps.toml
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/vps-frp-tunnel
+
+[Install]
+WantedBy=multi-user.target

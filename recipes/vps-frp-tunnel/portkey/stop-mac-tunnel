@@ -1,0 +1,21 @@
+#!/bin/zsh
+set -eu
+
+SESSION="${SESSION:-kaggle-portkey-gateway}"
+LOCAL_PORT="${LOCAL_PORT:-14100}"
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+  tmux kill-session -t "$SESSION"
+fi
+
+for listener in ${(f)"$(lsof -tiTCP:"$LOCAL_PORT" -sTCP:LISTEN 2>/dev/null || true)"}; do
+  parent="$(ps -o ppid= -p "$listener" | tr -d ' ')"
+  [[ "$(ps -o comm= -p "$listener")" == */ssh ]] || continue
+  [[ "$(ps -o comm= -p "$parent")" == */autossh ]] && kill "$parent"
+  kill "$listener" 2>/dev/null || true
+done
+
+if lsof -nP -iTCP:"$LOCAL_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "Local port $LOCAL_PORT is still in use" >&2
+  exit 1
+fi
+echo "Stopped $SESSION"

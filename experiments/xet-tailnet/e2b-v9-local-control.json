@@ -1,0 +1,26 @@
+{
+  "date": "2026-07-26",
+  "kernel": "devabhirupdas/tailscale-smoke-test-gemma-3n-e2b",
+  "version": 9,
+  "profile": "e2b",
+  "gpu_mode": "dual",
+  "transport": "local",
+  "model_bytes": 3026881888,
+  "stages_seconds": {
+    "llama_cpp_ready": 2.811,
+    "model_ready": 16.931,
+    "llama_server_listening": 83.002,
+    "model_warmed": 139.408
+  },
+  "keepalive": {
+    "interval_seconds": 10,
+    "completed": 38,
+    "skipped_busy": 0,
+    "first_seconds": 142.216,
+    "last_seconds": 513.885,
+    "answers": [
+      "yes"
+    ]
+  },
+  "termination": "manually stopped after the control passed nine minutes"
+}

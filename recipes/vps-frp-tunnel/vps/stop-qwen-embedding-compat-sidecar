@@ -1,0 +1,10 @@
+#!/bin/zsh
+set -eu
+
+VPS_HOST="${VPS_HOST:-vpsgtw}"
+REMOTE_DIR="${REMOTE_DIR:-/home/abhirup/kaggle-qwen-embedding-compat}"
+
+ssh "$VPS_HOST" "\
+  set -eu
+  cd '$REMOTE_DIR'
+  docker compose down"

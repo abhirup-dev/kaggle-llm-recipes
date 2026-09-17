@@ -2,52 +2,157 @@
 set -eu
 
 MODEL_SOURCE_MODE="${1:-dataset}"
+TRANSPORT_MODE="${2:-ngrok}"
+MODEL_PROFILE="${3:-gemma4}"
+GPU_MODE="${4:-dual}"
+CTX_SIZE="${5:-4096}"
+GPU_LAYERS="${6:-999}"
+KV_CACHE_TYPE="${7:-q8_0}"
+FORCE_PUSH="${8:-false}"
+N_CPU_MOE="${9:-0}"
+TENSOR_SPLIT="${10:-1,1}"
+FIT_MODE="${11:-on}"
+KERNEL_OVERRIDE="${KERNEL_OVERRIDE:-}"
+KERNEL_TITLE_OVERRIDE="${KERNEL_TITLE_OVERRIDE:-}"
 [[ "$MODEL_SOURCE_MODE" == dataset || "$MODEL_SOURCE_MODE" == hf ]] || {
-  echo "Usage: $0 [dataset|hf]" >&2
+  echo "Usage: $0 [dataset|hf] [ngrok|tailscale] [gemma4|e2b|e4b]" >&2
   exit 2
 }
-KERNEL="devabhirupdas/llama-cpp-gemma-4-26b-a4b-dynamic-q8-server"
-MODEL="gemma4-26b-a4b-ud-q8"
-ENDPOINT="https://neurosis-washroom-gliding.ngrok-free.dev"
+[[ "$TRANSPORT_MODE" == ngrok || "$TRANSPORT_MODE" == tailscale || "$TRANSPORT_MODE" == tailscale-join || "$TRANSPORT_MODE" == local ]] || {
+  echo "Usage: $0 [dataset|hf] [ngrok|tailscale|tailscale-join|local] [gemma4|e2b|e4b]" >&2
+  exit 2
+}
+[[ "$MODEL_PROFILE" == gemma4 || "$MODEL_PROFILE" == e2b || "$MODEL_PROFILE" == e4b ]] || {
+  echo "Usage: $0 [dataset|hf] [ngrok|tailscale] [gemma4|e2b|e4b] [dual|single]" >&2
+  exit 2
+}
+[[ "$GPU_MODE" == dual || "$GPU_MODE" == single ]] || {
+  echo "Usage: $0 [dataset|hf] [ngrok|tailscale] [gemma4|e2b|e4b] [dual|single] [ctx-size] [gpu-layers] [q8_0|q4_0]" >&2
+  exit 2
+}
+[[ "$CTX_SIZE" == <-> && "$GPU_LAYERS" == <-> && "$N_CPU_MOE" == <-> ]] || {
+  echo "Context size, GPU layers, and CPU MoE layers must be non-negative integers" >&2
+  exit 2
+}
+[[ "$GPU_MODE" == single || "$TENSOR_SPLIT" == <->,<-> ]] || {
+  echo "Dual-GPU tensor split must be two comma-separated non-negative integers" >&2
+  exit 2
+}
+[[ "$KV_CACHE_TYPE" == q8_0 || "$KV_CACHE_TYPE" == q4_0 ]] || {
+  echo "KV cache type must be q8_0 or q4_0" >&2
+  exit 2
+}
+[[ "$FORCE_PUSH" == false || "$FORCE_PUSH" == force ]] || {
+  echo "Final argument must be false or force" >&2
+  exit 2
+}
+[[ "$FIT_MODE" == on || "$FIT_MODE" == off ]] || {
+  echo "Fit mode must be on or off" >&2
+  exit 2
+}
+[[ "$MODEL_PROFILE" != gemma4 || "$GPU_MODE" == dual ]] || {
+  echo "The 26B A4B Q8 profile requires dual T4s" >&2
+  exit 2
+}
+[[ "$MODEL_PROFILE" == gemma4 || "$MODEL_SOURCE_MODE" == hf ]] || {
+  echo "The E2B and E4B benchmark profiles support only the hf source" >&2
+  exit 2
+}
+if [[ "$MODEL_PROFILE" == e2b ]]; then
+  KERNEL="devabhirupdas/gemma-3n-e2b-xet-benchmark"
+  MODEL="gemma3n-e2b-q4"
+  TAILSCALE_HOSTNAME="kaggle-gemma-e2b"
+elif [[ "$MODEL_PROFILE" == e4b ]]; then
+  KERNEL="devabhirupdas/gemma-3n-e4b-xet-benchmark"
+  MODEL="gemma3n-e4b-q4"
+  TAILSCALE_HOSTNAME="kaggle-gemma-e4b"
+else
+  KERNEL="devabhirupdas/llama-cpp-gemma-4-26b-a4b-dynamic-q8-server"
+  MODEL="gemma4-26b-a4b-ud-q8"
+  TAILSCALE_HOSTNAME="kaggle-gemma4"
+fi
+[[ -z "$KERNEL_OVERRIDE" ]] || KERNEL="$KERNEL_OVERRIDE"
+ENDPOINT=""
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
-SECRET_FILE="$ROOT_DIR/.secrets/ngrok.env"
+NGROK_SECRET_FILE="$ROOT_DIR/.secrets/ngrok.env"
+TAILSCALE_SECRET_FILE="$ROOT_DIR/.secrets/tailscale.env"
 HF_SECRET_FILE="$ROOT_DIR/.secrets/huggingface.env"
 
-for secret_file in "$SECRET_FILE"; do
-  [[ -f "$secret_file" ]] || { echo "Missing $secret_file" >&2; exit 1; }
-  source "$secret_file"
-done
+NGROK_AUTHTOKEN=unused
+TAILSCALE_AUTH_KEY=unused
+if [[ "$TRANSPORT_MODE" == ngrok ]]; then
+  [[ -f "$NGROK_SECRET_FILE" ]] || { echo "Missing $NGROK_SECRET_FILE" >&2; exit 1; }
+  source "$NGROK_SECRET_FILE"
+  ENDPOINT="https://neurosis-washroom-gliding.ngrok-free.dev"
+elif [[ "$TRANSPORT_MODE" == tailscale || "$TRANSPORT_MODE" == tailscale-join ]]; then
+  [[ -f "$TAILSCALE_SECRET_FILE" ]] || { echo "Missing $TAILSCALE_SECRET_FILE" >&2; exit 1; }
+  source "$TAILSCALE_SECRET_FILE"
+fi
+[[ "$TRANSPORT_MODE" != ngrok || -n "$NGROK_AUTHTOKEN" ]] || {
+  echo "NGROK_AUTHTOKEN is empty" >&2
+  exit 1
+}
+[[ "$TRANSPORT_MODE" != tailscale && "$TRANSPORT_MODE" != tailscale-join || -n "$TAILSCALE_AUTH_KEY" ]] || {
+  echo "TAILSCALE_AUTH_KEY is empty" >&2
+  exit 1
+}
 HF_TOKEN=unused
 if [[ "$MODEL_SOURCE_MODE" == hf ]]; then
   source "$HF_SECRET_FILE"
 fi
 
-if [[ -z "${NGROK_AUTHTOKEN:-}" ]]; then
-  echo "NGROK_AUTHTOKEN is empty" >&2
-  exit 1
-fi
+refresh_endpoint() {
+  [[ "$TRANSPORT_MODE" == local || "$TRANSPORT_MODE" == tailscale-join ]] && return 1
+  if [[ "$TRANSPORT_MODE" == ngrok ]]; then
+    return 0
+  fi
+  ENDPOINT="$(
+    tailscale status --json |
+      python3 -c '
+import json, sys
+status = json.load(sys.stdin)
+for peer in (status.get("Peer") or {}).values():
+    if peer.get("HostName") == "'"$TAILSCALE_HOSTNAME"'" and peer.get("Online"):
+        print("http://" + peer["TailscaleIPs"][0] + ":8080")
+        break
+'
+  )"
+  [[ -n "$ENDPOINT" ]]
+}
+
 is_ready() {
+  refresh_endpoint || return 1
   curl -fsS --max-time 5 \
     -H "ngrok-skip-browser-warning: true" \
-    "$ENDPOINT/health" >/dev/null || return 1
+    "$ENDPOINT/props" |
+    EXPECTED_CTX="$CTX_SIZE" python3 -c '
+import json, os, sys
+props = json.load(sys.stdin)
+assert props["default_generation_settings"]["n_ctx"] == int(os.environ["EXPECTED_CTX"])
+' || return 1
 
   curl -fsS --max-time 300 \
     -H "Content-Type: application/json" \
     -H "ngrok-skip-browser-warning: true" \
     "$ENDPOINT/v1/chat/completions" \
     -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: ready\"}],\"temperature\":1.0,\"top_p\":0.95,\"max_tokens\":96}" |
-    python3 -c 'import json,sys; assert json.load(sys.stdin)["choices"][0]["message"]["content"].strip()'
+    MODEL="$MODEL" python3 -c '
+import json, os, sys
+response = json.load(sys.stdin)
+assert response.get("model") == os.environ["MODEL"], response.get("model")
+assert response["choices"][0]["message"]["content"].strip()
+'
 }
 
-if is_ready; then
+if [[ "$FORCE_PUSH" != force ]] && is_ready; then
   echo "Already running: $ENDPOINT"
   exit 0
 fi
 
 kernel_dir="$(mktemp -d)"
 trap 'rm -rf "$kernel_dir"' EXIT
-export NGROK_AUTHTOKEN HF_TOKEN MODEL_SOURCE_MODE
+export NGROK_AUTHTOKEN TAILSCALE_AUTH_KEY HF_TOKEN MODEL_SOURCE_MODE TRANSPORT_MODE MODEL_PROFILE GPU_MODE CTX_SIZE GPU_LAYERS KV_CACHE_TYPE N_CPU_MOE TENSOR_SPLIT FIT_MODE KERNEL_OVERRIDE KERNEL_TITLE_OVERRIDE
 python3 - \
   "$SCRIPT_DIR/server.py" \
   "$kernel_dir/server.py" \
@@ -64,17 +169,40 @@ server_source, server_destination, metadata_source, metadata_destination = map(
 server = (
     server_source.read_text()
     .replace("__NGROK_AUTHTOKEN__", os.environ["NGROK_AUTHTOKEN"])
+    .replace("__TAILSCALE_AUTH_KEY__", os.environ["TAILSCALE_AUTH_KEY"])
     .replace("__HF_TOKEN__", os.environ["HF_TOKEN"])
     .replace("__MODEL_SOURCE_MODE__", os.environ["MODEL_SOURCE_MODE"])
+    .replace("__TRANSPORT_MODE__", os.environ["TRANSPORT_MODE"])
+    .replace("__MODEL_PROFILE__", os.environ["MODEL_PROFILE"])
+    .replace("__GPU_MODE__", os.environ["GPU_MODE"])
+    .replace("__CTX_SIZE__", os.environ["CTX_SIZE"])
+    .replace("__GPU_LAYERS__", os.environ["GPU_LAYERS"])
+    .replace("__KV_CACHE_TYPE__", os.environ["KV_CACHE_TYPE"])
+    .replace("__N_CPU_MOE__", os.environ["N_CPU_MOE"])
+    .replace("__TENSOR_SPLIT__", os.environ["TENSOR_SPLIT"])
+    .replace("__FIT_MODE__", os.environ["FIT_MODE"])
 )
 if any(placeholder in server for placeholder in (
-    "__NGROK_AUTHTOKEN__", "__HF_TOKEN__", "__MODEL_SOURCE_MODE__"
+    "__NGROK_AUTHTOKEN__", "__TAILSCALE_AUTH_KEY__", "__HF_TOKEN__",
+    "__MODEL_SOURCE_MODE__", "__TRANSPORT_MODE__", "__MODEL_PROFILE__", "__GPU_MODE__",
+    "__CTX_SIZE__", "__GPU_LAYERS__", "__KV_CACHE_TYPE__", "__N_CPU_MOE__", "__TENSOR_SPLIT__",
+    "__FIT_MODE__"
 )):
     raise SystemExit("kernel template placeholder was not replaced")
 server_destination.write_text(server)
 metadata = json.loads(metadata_source.read_text())
 if os.environ["MODEL_SOURCE_MODE"] == "hf":
     metadata["dataset_sources"] = []
+if os.environ["MODEL_PROFILE"] == "e2b":
+    metadata["id"] = "devabhirupdas/gemma-3n-e2b-xet-benchmark"
+    metadata["title"] = "Gemma 3n E2B Xet Benchmark"
+elif os.environ["MODEL_PROFILE"] == "e4b":
+    metadata["id"] = "devabhirupdas/gemma-3n-e4b-xet-benchmark"
+    metadata["title"] = "Gemma 3n E4B Xet Benchmark"
+if os.environ["KERNEL_OVERRIDE"]:
+    metadata["id"] = os.environ["KERNEL_OVERRIDE"]
+if os.environ["KERNEL_TITLE_OVERRIDE"]:
+    metadata["title"] = os.environ["KERNEL_TITLE_OVERRIDE"]
 metadata_destination.write_text(json.dumps(metadata))
 PY
 
@@ -91,7 +219,8 @@ for _ in {1..180}; do
 
   kernel_status="$(kaggle kernels status "$KERNEL" 2>&1 || true)"
   echo "$kernel_status"
-  if [[ "$kernel_status" == *"ERROR"* ]]; then
+  if [[ "$kernel_status" == *"ERROR"* ||
+        "$kernel_status" == *"CANCEL_ACKNOWLEDGED"* ]]; then
     exit 1
   fi
   sleep 10

@@ -1,0 +1,26 @@
+{
+  "date": "2026-07-26",
+  "kernel": "devabhirupdas/tailscale-smoke-test-gemma-3n-e2b",
+  "version": 10,
+  "profile": "e2b",
+  "gpu_mode": "dual",
+  "transport": "tailscale-join",
+  "model_bytes": 3026881888,
+  "stages_seconds": {
+    "llama_cpp_ready": 3.001,
+    "model_ready": 20.034,
+    "llama_server_listening": 88.112,
+    "model_warmed": 144.602,
+    "tailnet_joined": 147.075
+  },
+  "keepalive": {
+    "interval_seconds": 10,
+    "completed": 2,
+    "first_seconds": 149.939,
+    "last_seconds": 158.04,
+    "answers": [
+      "yes"
+    ]
+  },
+  "termination": "Kaggle CANCEL_ACKNOWLEDGED after tailnet join without Tailscale Serve"
+}

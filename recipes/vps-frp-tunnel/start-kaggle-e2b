@@ -1,0 +1,137 @@
+#!/bin/zsh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+FRP_SECRET_FILE="$ROOT_DIR/.secrets/vps-frp.env"
+HF_SECRET_FILE="$ROOT_DIR/.secrets/huggingface.env"
+KAGGLE_SECRET_FILE="${1:-$ROOT_DIR/.secrets/kaggle-codebuddha.env}"
+KAGGLE_OWNER="${2:-codebuddha}"
+REMOTE_PORT_OVERRIDE="${3:-}"
+PROXY_NAME_OVERRIDE="${4:-}"
+SERVER_VARIANT="${5:-text}"
+VPS_HOST="${VPS_HOST:-vpsme}"
+
+case "$SERVER_VARIANT" in
+  text)
+    KAGGLE_SLUG="gemma-3n-e2b-vps-observability-smoke"
+    SERVER_SOURCE="$SCRIPT_DIR/kaggle-e2b/server.py"
+    KERNEL_TITLE="Gemma 3n E2B VPS Observability Smoke"
+    ;;
+  multimodal)
+    KAGGLE_SLUG="gemma-3n-e2b-multimodal-vps-frp"
+    SERVER_SOURCE="$SCRIPT_DIR/kaggle-e2b-multimodal/server.py"
+    KERNEL_TITLE="Gemma 3n E2B Multimodal VPS FRP"
+    ;;
+  *)
+    echo "Variant must be text or multimodal" >&2
+    exit 2
+    ;;
+esac
+
+for required in "$FRP_SECRET_FILE" "$HF_SECRET_FILE"; do
+  [[ -f "$required" ]] || { echo "Missing $required" >&2; exit 1; }
+done
+[[ "$KAGGLE_SECRET_FILE" == "-" || -f "$KAGGLE_SECRET_FILE" ]] || {
+  echo "Missing $KAGGLE_SECRET_FILE" >&2
+  exit 1
+}
+
+set -a
+source "$FRP_SECRET_FILE"
+source "$HF_SECRET_FILE"
+[[ "$KAGGLE_SECRET_FILE" == "-" ]] || source "$KAGGLE_SECRET_FILE"
+set +a
+
+: "${FRP_SERVER_ADDR:?missing FRP_SERVER_ADDR}"
+: "${FRP_AUTH_TOKEN:?missing FRP_AUTH_TOKEN}"
+: "${HF_TOKEN:?missing HF_TOKEN}"
+
+export FRP_SERVER_PORT="${FRP_SERVER_PORT:-7443}"
+export FRP_PROXY_NAME="${PROXY_NAME_OVERRIDE:-${FRP_PROXY_NAME:-${KAGGLE_OWNER}-e2b}}"
+export FRP_LOCAL_ADDR="${FRP_LOCAL_ADDR:-127.0.0.1}"
+export FRP_LOCAL_PORT="${FRP_LOCAL_PORT:-8080}"
+export FRP_REMOTE_PORT="${REMOTE_PORT_OVERRIDE:-${FRP_REMOTE_PORT:-19101}}"
+export LOG_RELAY_HOST="${LOG_RELAY_HOST:-$FRP_SERVER_ADDR}"
+export LOG_RELAY_PORT="${LOG_RELAY_PORT:-24224}"
+export LOG_WORKER_ID="${KAGGLE_OWNER}-${KAGGLE_SLUG}"
+export LOG_RELAY_ENABLED="${LOG_RELAY_ENABLED:-1}"
+case "$LOG_RELAY_ENABLED" in
+  1)
+    export LOG_RELAY_CA_PEM="$(
+      ssh "$VPS_HOST" "cat /home/abhirup/kaggle-log-relay/certs/ca.crt"
+    )"
+    export LOG_RELAY_SHARED_KEY="$(
+      python3 -c 'import hashlib, hmac, os; print(hmac.new(
+        os.environ["FRP_AUTH_TOKEN"].encode(),
+        b"kaggle-log-relay/v1",
+        hashlib.sha256,
+      ).hexdigest())'
+    )"
+    ;;
+  0)
+    export LOG_RELAY_CA_PEM=""
+    export LOG_RELAY_SHARED_KEY=""
+    ;;
+  *)
+    echo "LOG_RELAY_ENABLED must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
+export KAGGLE_OWNER KAGGLE_SLUG
+export KERNEL_TITLE
+
+kernel_dir="$(mktemp -d)"
+trap 'rm -rf "$kernel_dir"' EXIT
+cp "$SCRIPT_DIR/kaggle-e2b/kernel-metadata.json" "$kernel_dir/kernel-metadata.json"
+python3 - "$kernel_dir/kernel-metadata.json" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+metadata = json.loads(path.read_text())
+metadata["id"] = f"{os.environ['KAGGLE_OWNER']}/{os.environ['KAGGLE_SLUG']}"
+metadata["title"] = os.environ["KERNEL_TITLE"]
+path.write_text(json.dumps(metadata))
+PY
+
+python3 - \
+  "$SCRIPT_DIR/frp_tunnel.py" \
+  "$SCRIPT_DIR/observability.py" \
+  "$SERVER_SOURCE" \
+  "$kernel_dir/server.py" <<'PY'
+import pathlib
+import os
+import re
+import sys
+
+tunnel_path, observability_path, server_path, destination_path = map(pathlib.Path, sys.argv[1:])
+tunnel = tunnel_path.read_text().split("\nif __name__ == \"__main__\":", 1)[0]
+observability = observability_path.read_text().split(
+    "\nif __name__ == \"__main__\":", 1
+)[0].replace("from __future__ import annotations\n", "")
+server = server_path.read_text().replace(
+    "from frp_tunnel import TunnelConfig, run as run_tunnel\n", ""
+).replace("run_tunnel(tunnel_config)", "run(tunnel_config)")
+server = re.sub(r"from observability import \(\n.*?\n\)\n", "", server, flags=re.DOTALL)
+names = (
+    "FRP_SERVER_ADDR", "FRP_SERVER_PORT", "FRP_AUTH_TOKEN", "FRP_PROXY_NAME",
+    "FRP_LOCAL_ADDR", "FRP_LOCAL_PORT", "FRP_REMOTE_PORT",
+    "HF_TOKEN", "LOG_RELAY_HOST", "LOG_RELAY_PORT", "LOG_RELAY_SHARED_KEY",
+    "LOG_RELAY_CA_PEM", "LOG_WORKER_ID", "LOG_RELAY_ENABLED",
+)
+server = server.replace(
+    "__RUNTIME_SECRETS__",
+    repr({name: os.environ[name] for name in names}),
+)
+pathlib.Path(destination_path).write_text(
+    tunnel + "\n\n" + observability + "\n\n" + server
+)
+PY
+
+python3 "$SCRIPT_DIR/frp_tunnel.py" --self-test
+python3 "$SCRIPT_DIR/observability.py"
+kaggle kernels push -p "$kernel_dir" --accelerator NvidiaTeslaT4 --timeout 43200
+echo "Pushed $KAGGLE_OWNER/$KAGGLE_SLUG"

@@ -1,0 +1,18 @@
+[Unit]
+Description=Isolated FRP reverse-tunnel server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.config/vps-frp-tunnel
+ExecStart=%h/.local/lib/vps-frp-tunnel/frps -c %h/.config/vps-frp-tunnel/frps.toml
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=default.target

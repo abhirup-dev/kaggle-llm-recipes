@@ -1,0 +1,14 @@
+{
+  "id": "codebuddha/gemma-3n-e2b-vps-frp-smoke",
+  "title": "Gemma 3n E2B VPS FRP Smoke",
+  "code_file": "server.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

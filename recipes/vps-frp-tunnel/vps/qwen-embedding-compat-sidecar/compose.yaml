@@ -1,0 +1,25 @@
+services:
+  qwen-embedding-compat:
+    image: haproxy:3.2-alpine@sha256:2d3ca36f4385cf81d660d42d9d3fd3a0d20978efc6784481615d3497bad3c226
+    container_name: kaggle-qwen-embedding-compat
+    restart: unless-stopped
+    ports:
+      - "${VPS_TAILSCALE_IP:-100.96.245.110}:${QWEN_COMPAT_PORT:-14102}:8080"
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - kaggle-gateway
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  kaggle-gateway:
+    external: true

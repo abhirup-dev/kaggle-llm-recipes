@@ -1,0 +1,11 @@
+#!/bin/zsh
+set -u
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+exit_code=0
+
+"$SCRIPT_DIR/start-mac-tunnel" || exit_code=1
+"$SCRIPT_DIR/start-openai-compat-tunnel" || exit_code=1
+"$SCRIPT_DIR/start-qwen-embedding-compat-tunnel" || exit_code=1
+
+exit "$exit_code"

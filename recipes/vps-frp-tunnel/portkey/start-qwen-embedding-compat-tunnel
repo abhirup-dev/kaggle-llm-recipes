@@ -1,0 +1,9 @@
+#!/bin/zsh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+SESSION=kaggle-qwen-embedding-compat \
+LOCAL_PORT="${LOCAL_PORT:-14102}" \
+REMOTE_PORT="${REMOTE_PORT:-14102}" \
+  "$SCRIPT_DIR/start-mac-tunnel"

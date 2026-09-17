@@ -1,0 +1,29 @@
+#!/bin/zsh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+VPS_HOST="${VPS_HOST:-vpsgtw}"
+REMOTE_DIR="${REMOTE_DIR:-/home/abhirup/kaggle-qwen-embedding-compat}"
+QWEN_COMPAT_PORT="${QWEN_COMPAT_PORT:-14102}"
+VPS_TAILSCALE_IP="${VPS_TAILSCALE_IP:-100.96.245.110}"
+
+[[ "$QWEN_COMPAT_PORT" == <-> && "$QWEN_COMPAT_PORT" -ge 1 && "$QWEN_COMPAT_PORT" -le 65535 ]] || {
+  echo "Invalid port: $QWEN_COMPAT_PORT" >&2
+  exit 2
+}
+
+ssh "$VPS_HOST" "mkdir -p '$REMOTE_DIR'"
+scp "$SCRIPT_DIR/qwen-embedding-compat-sidecar/compose.yaml" \
+  "$SCRIPT_DIR/qwen-embedding-compat-sidecar/haproxy.cfg" \
+  "$VPS_HOST:$REMOTE_DIR/"
+printf 'QWEN_COMPAT_PORT=%s\nVPS_TAILSCALE_IP=%s\n' \
+  "$QWEN_COMPAT_PORT" "$VPS_TAILSCALE_IP" |
+  ssh "$VPS_HOST" "umask 077; cat > '$REMOTE_DIR/.env'"
+
+ssh "$VPS_HOST" "\
+  set -eu
+  cd '$REMOTE_DIR'
+  docker compose config --quiet
+  docker compose pull
+  docker compose up -d --force-recreate
+  docker compose ps"

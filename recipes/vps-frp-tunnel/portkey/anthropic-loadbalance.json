@@ -1,0 +1,19 @@
+{
+  "strategy": {
+    "mode": "loadbalance"
+  },
+  "targets": [
+    {
+      "provider": "anthropic",
+      "api_key": "no-key",
+      "custom_host": "http://172.30.0.1:19101/v1",
+      "weight": 1
+    },
+    {
+      "provider": "anthropic",
+      "api_key": "no-key",
+      "custom_host": "http://172.30.0.1:19102/v1",
+      "weight": 1
+    }
+  ]
+}

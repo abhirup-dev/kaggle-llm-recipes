@@ -1,0 +1,227 @@
+#!/bin/zsh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+FRP_SECRET_FILE="$ROOT_DIR/.secrets/vps-frp.env"
+HF_SECRET_FILE="$ROOT_DIR/.secrets/huggingface.env"
+KAGGLE_SECRET_FILE="${1:--}"
+KAGGLE_OWNER="${2:-devabhirupdas}"
+REQUESTED_FRP_REMOTE_PORT="${3:-19101}"
+REQUESTED_FRP_PROXY_NAME="${4:-${KAGGLE_OWNER}-gemma4-26b}"
+CTX_SIZE="${5:-131072}"
+N_CPU_MOE="${6:-2}"
+TENSOR_SPLIT="${7:-16,14}"
+MODEL_PROFILE="${8:-gemma4}"
+KV_CACHE_TYPE="${9:-q8_0}"
+FIT_MODE="${10:-on}"
+MODEL_SOURCE_MODE="${11:-dataset}"
+VPS_HOST="${VPS_HOST:-vpsgtw}"
+[[ "$MODEL_PROFILE" == gemma4 || "$MODEL_PROFILE" == e2b || "$MODEL_PROFILE" == e4b ]] || {
+  echo "Model profile must be gemma4, e2b, or e4b" >&2
+  exit 2
+}
+[[ "$KV_CACHE_TYPE" == q8_0 || "$KV_CACHE_TYPE" == q4_0 ]] || {
+  echo "KV cache type must be q8_0 or q4_0" >&2
+  exit 2
+}
+[[ "$FIT_MODE" == on || "$FIT_MODE" == off ]] || {
+  echo "Fit mode must be on or off" >&2
+  exit 2
+}
+[[ "$MODEL_SOURCE_MODE" == dataset || "$MODEL_SOURCE_MODE" == hf ]] || {
+  echo "Model source must be dataset or hf" >&2
+  exit 2
+}
+KAGGLE_SLUG="${KAGGLE_SLUG:-llama-cpp-${MODEL_PROFILE}-vps-frp-server}"
+KAGGLE_REF="${KAGGLE_OWNER}/${KAGGLE_SLUG}"
+
+[[ -f "$FRP_SECRET_FILE" ]] || { echo "Missing $FRP_SECRET_FILE" >&2; exit 1; }
+[[ "$KAGGLE_SECRET_FILE" == "-" || -f "$KAGGLE_SECRET_FILE" ]] || {
+  echo "Missing $KAGGLE_SECRET_FILE" >&2
+  exit 1
+}
+
+set -a
+source "$FRP_SECRET_FILE"
+[[ "$MODEL_SOURCE_MODE" == dataset ]] || source "$HF_SECRET_FILE"
+[[ "$KAGGLE_SECRET_FILE" == "-" ]] || source "$KAGGLE_SECRET_FILE"
+set +a
+
+: "${FRP_SERVER_ADDR:?missing FRP_SERVER_ADDR}"
+: "${FRP_AUTH_TOKEN:?missing FRP_AUTH_TOKEN}"
+[[ "$MODEL_SOURCE_MODE" == dataset ]] || : "${HF_TOKEN:?missing HF_TOKEN}"
+export FRP_SERVER_PORT="${FRP_SERVER_PORT:-7443}"
+FRP_REMOTE_PORT="$REQUESTED_FRP_REMOTE_PORT"
+FRP_PROXY_NAME="$REQUESTED_FRP_PROXY_NAME"
+export FRP_PROXY_NAME FRP_REMOTE_PORT
+export FRP_LOCAL_ADDR="127.0.0.1"
+export FRP_LOCAL_PORT="8080"
+export LOG_RELAY_HOST="${LOG_RELAY_HOST:-$FRP_SERVER_ADDR}"
+export LOG_RELAY_PORT="${LOG_RELAY_PORT:-24224}"
+export LOG_WORKER_ID="${KAGGLE_OWNER}-${KAGGLE_SLUG}"
+export LOG_RELAY_ENABLED="${LOG_RELAY_ENABLED:-1}"
+case "$LOG_RELAY_ENABLED" in
+  1)
+    export LOG_RELAY_CA_PEM="$(
+      ssh "$VPS_HOST" "cat /home/abhirup/kaggle-log-relay/certs/ca.crt"
+    )"
+    export LOG_RELAY_SHARED_KEY="$(
+      python3 -c 'import hashlib, hmac, os; print(hmac.new(
+        os.environ["FRP_AUTH_TOKEN"].encode(),
+        b"kaggle-log-relay/v1",
+        hashlib.sha256,
+      ).hexdigest())'
+    )"
+    ;;
+  0)
+    export LOG_RELAY_CA_PEM=""
+    export LOG_RELAY_SHARED_KEY=""
+    ;;
+  *)
+    echo "LOG_RELAY_ENABLED must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
+export KAGGLE_OWNER KAGGLE_SLUG CTX_SIZE N_CPU_MOE TENSOR_SPLIT MODEL_PROFILE KV_CACHE_TYPE FIT_MODE MODEL_SOURCE_MODE
+
+# The generated Kaggle kernel is disposable. Recreate it on every launch so a
+# stale version can never keep a second GPU session alive.
+"$SCRIPT_DIR/stop-kaggle-kernel" "$KAGGLE_REF"
+
+kernel_dir="$(mktemp -d)"
+trap 'rm -rf "$kernel_dir"' EXIT
+
+python3 - \
+  "$SCRIPT_DIR/frp_tunnel.py" \
+  "$SCRIPT_DIR/observability.py" \
+  "$ROOT_DIR/recipes/llama-cpp-gemma4-26b-a4b-q8/server.py" \
+  "$ROOT_DIR/recipes/llama-cpp-gemma4-26b-a4b-q8/kernel-metadata.json" \
+  "$kernel_dir/server.py" \
+  "$kernel_dir/kernel-metadata.json" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+tunnel_path, observability_path, server_path, metadata_path, output_server, output_metadata = map(
+    pathlib.Path, sys.argv[1:]
+)
+tunnel = tunnel_path.read_text().split("\nif __name__ == \"__main__\":", 1)[0]
+observability = observability_path.read_text().split(
+    "\nif __name__ == \"__main__\":", 1
+)[0].replace("from __future__ import annotations\n", "")
+server = server_path.read_text()
+replacements = {
+    "__NGROK_AUTHTOKEN__": "unused",
+    "__TAILSCALE_AUTH_KEY__": "unused",
+    "__HF_TOKEN__": os.environ.get("HF_TOKEN", "unused"),
+    "__MODEL_SOURCE_MODE__": os.environ["MODEL_SOURCE_MODE"],
+    "__TRANSPORT_MODE__": "local",
+    "__MODEL_PROFILE__": os.environ["MODEL_PROFILE"],
+    "__GPU_MODE__": "dual",
+    "__CTX_SIZE__": os.environ["CTX_SIZE"],
+    "__GPU_LAYERS__": "999",
+    "__KV_CACHE_TYPE__": os.environ["KV_CACHE_TYPE"],
+    "__N_CPU_MOE__": os.environ["N_CPU_MOE"],
+    "__TENSOR_SPLIT__": os.environ["TENSOR_SPLIT"],
+    "__FIT_MODE__": os.environ["FIT_MODE"],
+}
+for placeholder, value in replacements.items():
+    server = server.replace(placeholder, value)
+if any(placeholder in server for placeholder in replacements):
+    raise SystemExit("kernel template placeholder was not replaced")
+
+runtime = {
+    name: os.environ[name]
+    for name in (
+        "FRP_SERVER_ADDR",
+        "FRP_SERVER_PORT",
+        "FRP_AUTH_TOKEN",
+        "FRP_PROXY_NAME",
+        "FRP_LOCAL_ADDR",
+        "FRP_LOCAL_PORT",
+        "FRP_REMOTE_PORT",
+        "LOG_RELAY_HOST",
+        "LOG_RELAY_PORT",
+        "LOG_RELAY_SHARED_KEY",
+        "LOG_RELAY_CA_PEM",
+        "LOG_WORKER_ID",
+        "LOG_RELAY_ENABLED",
+    )
+}
+server = server.replace("import time\n", "import time\nimport threading\n", 1)
+server = server.replace(
+    'mark("dependencies_ready")',
+    f"""\
+os.environ.update({runtime!r})
+log_relay_enabled = os.environ["LOG_RELAY_ENABLED"] == "1"
+install_observability(log_relay_enabled)
+logger = configure_logger()
+fluent_bit = fluent_bit_log = resource_sampler_stop = None
+emit(logger, "worker_starting", worker_id=os.environ["LOG_WORKER_ID"])
+mark("dependencies_ready")""",
+    1,
+)
+server = server.replace(
+    'log = open("/kaggle/working/llama-server.log", "w")',
+    """\
+log = open("/kaggle/working/llama-server.log", "w")
+if log_relay_enabled:
+    fluent_bit, fluent_bit_log = start_fluent_bit(os.environ["LOG_WORKER_ID"])
+    emit(
+        logger,
+        "log_relay_started",
+        relay_host=os.environ["LOG_RELAY_HOST"],
+        relay_port=int(os.environ["LOG_RELAY_PORT"]),
+    )
+else:
+    emit(logger, "log_relay_disabled")""",
+    1,
+)
+server = server.replace(
+    "for _ in range(900):",
+    """\
+resource_sampler_stop = start_resource_sampler(logger, server.pid)
+
+for _ in range(900):""",
+    1,
+)
+server = server.replace(
+    'mark("tunnel_ready", transport=TRANSPORT_MODE)',
+    f"""\
+os.environ.update({runtime!r})
+tunnel_config = TunnelConfig.from_env()
+verify_public_ingress(tunnel_config)
+tunnel_thread = threading.Thread(target=run, args=(tunnel_config,), daemon=True)
+tunnel_thread.start()
+mark("tunnel_ready", transport="frp", remote_port=tunnel_config.remote_port)""",
+    1,
+)
+server = server.replace(
+    "    server.terminate()\n    log.close()",
+    """\
+    if resource_sampler_stop:
+        resource_sampler_stop.set()
+    if fluent_bit:
+        fluent_bit.terminate()
+    if fluent_bit_log:
+        fluent_bit_log.close()
+    server.terminate()
+    log.close()""",
+    1,
+)
+output_server.write_text(tunnel + "\n\n" + observability + "\n\n" + server)
+
+metadata = json.loads(metadata_path.read_text())
+metadata["id"] = f"{os.environ['KAGGLE_OWNER']}/{os.environ['KAGGLE_SLUG']}"
+metadata["title"] = os.environ["KAGGLE_SLUG"].replace("-", " ")
+if os.environ["MODEL_SOURCE_MODE"] == "hf":
+    metadata["dataset_sources"] = []
+output_metadata.write_text(json.dumps(metadata))
+PY
+
+python3 "$SCRIPT_DIR/frp_tunnel.py" --self-test
+python3 "$SCRIPT_DIR/observability.py"
+kaggle kernels push -p "$kernel_dir" --accelerator NvidiaTeslaT4 --timeout 43200
+echo "Pushed $KAGGLE_REF"

@@ -1,0 +1,51 @@
+#!/bin/zsh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)"
+SECRET_FILE="$ROOT_DIR/.secrets/vps-frp.env"
+VPS_HOST="${VPS_HOST:-vpsme}"
+LOG_RELAY_PORT="${1:-24224}"
+REMOTE_DIR="/home/abhirup/kaggle-log-relay"
+
+[[ -f "$SECRET_FILE" ]] || { echo "Missing $SECRET_FILE" >&2; exit 1; }
+[[ "$LOG_RELAY_PORT" == <-> && "$LOG_RELAY_PORT" -ge 1 && "$LOG_RELAY_PORT" -le 65535 ]] || {
+  echo "Invalid port: $LOG_RELAY_PORT" >&2
+  exit 2
+}
+
+set -a
+source "$SECRET_FILE"
+set +a
+: "${FRP_AUTH_TOKEN:?missing FRP_AUTH_TOKEN}"
+
+shared_key="$(
+  python3 -c 'import hashlib, hmac, os; print(hmac.new(
+    os.environ["FRP_AUTH_TOKEN"].encode(),
+    b"kaggle-log-relay/v1",
+    hashlib.sha256,
+  ).hexdigest())'
+)"
+
+ssh "$VPS_HOST" "mkdir -p '$REMOTE_DIR/certs' '$REMOTE_DIR/buffer' /home/abhirup/kaggle-logs"
+scp "$SCRIPT_DIR/fluent-bit-relay/compose.yaml" \
+  "$SCRIPT_DIR/fluent-bit-relay/fluent-bit.conf" \
+  "$VPS_HOST:$REMOTE_DIR/"
+printf 'LOG_RELAY_SHARED_KEY=%s\nLOG_RELAY_PORT=%s\n' "$shared_key" "$LOG_RELAY_PORT" |
+  ssh "$VPS_HOST" "umask 077; cat > '$REMOTE_DIR/.env'"
+
+ssh "$VPS_HOST" "\
+  set -eu
+  cd '$REMOTE_DIR'
+  if [ ! -s certs/ca.crt ] || [ ! -s certs/server.crt ] || [ ! -s certs/server.key ]; then
+    openssl req -x509 -newkey rsa:3072 -nodes -days 3650 \
+      -keyout certs/ca.key -out certs/ca.crt -subj '/CN=kaggle-log-relay-ca'
+    openssl req -newkey rsa:3072 -nodes \
+      -keyout certs/server.key -out certs/server.csr -subj '/CN=kaggle-log-relay'
+    openssl x509 -req -days 3650 -in certs/server.csr \
+      -CA certs/ca.crt -CAkey certs/ca.key -CAcreateserial -out certs/server.crt
+    chmod 600 certs/ca.key certs/server.key
+  fi
+  docker compose pull
+  docker compose up -d
+  docker compose ps"

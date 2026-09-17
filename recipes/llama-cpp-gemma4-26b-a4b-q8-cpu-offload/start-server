@@ -1,0 +1,14 @@
+#!/bin/zsh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+BASE_RECIPE="$SCRIPT_DIR/../llama-cpp-gemma4-26b-a4b-q8"
+CTX_SIZE="${1:-262144}"
+N_CPU_MOE="${2:-6}"
+TENSOR_SPLIT="${3:-18,12}"
+
+export KERNEL_OVERRIDE="devabhirupdas/llama-cpp-gemma-4-26b-a4b-q8-cpu-offload"
+export KERNEL_TITLE_OVERRIDE="llama.cpp Gemma 4 26B A4B Q8 CPU Offload"
+exec "$BASE_RECIPE/start-server" \
+  dataset ngrok gemma4 dual "$CTX_SIZE" 999 q8_0 force \
+  "$N_CPU_MOE" "$TENSOR_SPLIT"

@@ -1,0 +1,12 @@
+#!/bin/zsh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+exec python3 "$ROOT_DIR/experiments/xet-tailnet/benchmark.py" \
+  --endpoint https://neurosis-washroom-gliding.ngrok-free.dev \
+  --model gemma4-26b-a4b-ud-q8 \
+  --profile gemma4-q8-256k-ncmoe6-split18-12 \
+  --gpu-mode dual \
+  --soak-seconds "${SOAK_SECONDS:-300}" \
+  --output "$SCRIPT_DIR/results.jsonl"
